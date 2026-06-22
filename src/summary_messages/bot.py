@@ -298,13 +298,13 @@ class SummaryBot:
         history = self.conversations.get(key, [])
 
         lower = text.lower()
-        members = self.config.group_members_list
+        members = self.settings.group_members_list
         member_lower = {m.lower() for m in members}
         creator_keywords = ["who created", "who made", "who build", "who built", "your master", "who owns", "who own", "who is your creator", "who made you", "who created you", "who owns you", "who's your master", "who your master", "your creator"]
         if any(kw in lower for kw in creator_keywords):
             member_list = ", ".join(members) if members else ""
-            parts = [f"I was created by the {self.config.group_name} group."]
-            parts.append(f"{self.config.group_name} is a software and design project or collective team. Members associated with the project include technology students and aspiring software developers, such as those at the Cambodia Academy of Digital Technology.")
+            parts = [f"I was created by the {self.settings.group_name} group."]
+            parts.append(f"{self.settings.group_name} is a software and design project or collective team. Members associated with the project include technology students and aspiring software developers, such as those at the Cambodia Academy of Digital Technology.")
             if member_list:
                 parts.append(f"Members: {member_list}.")
             parts.append("GitHub: https://github.com/COPPSARY/")
@@ -313,7 +313,7 @@ class SummaryBot:
 
         for m in member_lower:
             if m in lower and ("do you know" in lower or "who is" in lower or "tell me about" in lower):
-                await message.reply_text(f"Yes! {m.capitalize()} is a member of {self.config.group_name} — a software and design collective of technology students and aspiring developers at the Cambodia Academy of Digital Technology. GitHub: https://github.com/COPPSARY/")
+                await message.reply_text(f"Yes! {m.capitalize()} is a member of {self.settings.group_name} — a software and design collective of technology students and aspiring developers at the Cambodia Academy of Digital Technology. GitHub: https://github.com/COPPSARY/")
                 return
 
         await message.reply_chat_action("typing")
