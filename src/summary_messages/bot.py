@@ -25,14 +25,14 @@ class BotRuntime:
 
 
 async def _reply_chunked(message, text: str) -> None:
-    if len(text) <= 3900:
+    if len(text) <= 300:
         await message.reply_text(text)
         return
 
     start = 0
     while start < len(text):
-        await message.reply_text(text[start : start + 3900])
-        start += 3900
+        await message.reply_text(text[start : start + 300])
+        start += 300
 
 
 class SummaryBot:

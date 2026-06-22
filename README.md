@@ -39,7 +39,3 @@ Telegram group summarizer built with Python, `uv`, SQLite, and pluggable LLM pro
 - `SQLITE_PATH` - SQLite database location
 - `DAILY_SUMMARY_TIME` - daily digest time in 24-hour `HH:MM`
 - `TIMEZONE` - timezone for daily scheduling
-
-## Agent Files
-
-The workspace includes a custom agent in [`.github/agents/telegram-summary-bot.agent.md`](.github/agents/telegram-summary-bot.agent.md) for Telegram summary bot work.

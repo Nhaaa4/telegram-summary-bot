@@ -60,5 +60,22 @@ class SummaryClient:
             )
             choice = response.choices[0].message.content or ""
             return choice.strip()
+        
+        if self.settings.llm_provider == "huggingface":
+            api_key = self.settings.hf_token
+            if not api_key:
+                raise ValueError("HF_TOKEN is required when LLM_PROVIDER=huggingface")
+            client = OpenAI(api_key=api_key, base_url="https://router.huggingface.co/v1")
+            response = client.chat.completions.create(
+                model=self.settings.llm_model,
+                messages=[
+                    {"role": "system", "content": prompt.system},
+                    {"role": "user", "content": prompt.user},
+                ],
+                temperature=0.3,
+                max_tokens=700
+            )
+            choice = response.choices[0].message.content or ""
+            return choice.strip()
 
         raise ValueError(f"Unsupported LLM provider: {self.settings.llm_provider}")
