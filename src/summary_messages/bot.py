@@ -29,12 +29,12 @@ class BotRuntime:
 
 async def _reply_chunked(message, text: str) -> None:
     if len(text) <= 3900:
-        await message.reply_text(text)
+        await message.reply_text(text, parse_mode="Markdown")
         return
 
     start = 0
     while start < len(text):
-        await message.reply_text(text[start : start + 3900])
+        await message.reply_text(text[start : start + 3900], parse_mode="Markdown")
         start += 3900
 
 
@@ -169,7 +169,6 @@ class SummaryBot:
             return
         logger.info("Manual daily summary requested for chat_id=%s chat_title=%r", chat.id, chat.title)
         await self._send_daily_summary_for_chat(chat.id, chat.title or chat.full_name or str(chat.id))
-        await message.reply_text("Daily summary sent.")
 
     async def store_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         message = update.effective_message
@@ -246,7 +245,7 @@ class SummaryBot:
         if application is None:
             logger.warning("Cannot send message because application is not initialized for chat_id=%s", chat_id)
             return
-        await application.bot.send_message(chat_id=chat_id, text=text)
+        await application.bot.send_message(chat_id=chat_id, text=text, parse_mode="Markdown")
 
     async def joke_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         message = update.effective_message

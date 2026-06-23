@@ -27,7 +27,7 @@ Use these sections (skip any with nothing useful):
 - 😂 Fun / Random Moments
 - 📍 Plans / Things to Remember
 - ❓ Questions / Still Unclear
-Keep it concise and Telegram-friendly.
+Keep it concise, short and Telegram-friendly.
 """
 
 
