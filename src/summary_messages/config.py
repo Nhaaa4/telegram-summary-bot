@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     summary_window_default: str = Field(default="24h", validation_alias="SUMMARY_WINDOW_DEFAULT")
     
     daily_summary_time: str = Field(default="23:00", validation_alias="DAILY_SUMMARY_TIME")
-    timezone: str = Field(default="UTC", validation_alias="TIMEZONE")
+    timezone: str = Field(default="Asia/Phnom_Penh", validation_alias="TIMEZONE")
     max_messages_per_summary: int = Field(default=120, validation_alias="MAX_MESSAGES_PER_SUMMARY")
 
     group_name: str = Field(default="COPPSARY", validation_alias="GROUP_NAME")

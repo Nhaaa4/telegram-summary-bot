@@ -310,6 +310,13 @@ class SummaryBot:
             id=f"reminder-{reminder_id}",
             replace_existing=True,
         )
+        
+        logger.info(
+            "Reminder job added: id=reminder-%s run_date=%s scheduler_running=%s",
+            reminder_id,
+            remind_at,
+            self.scheduler.running,
+        )
 
         await message.reply_text(
             f"✅ Reminder set!\n\n"
@@ -352,6 +359,7 @@ class SummaryBot:
             time_text,
             settings={
                 "TIMEZONE": self.settings.timezone,
+                "TO_TIMEZONE": self.settings.timezone,
                 "RETURN_AS_TIMEZONE_AWARE": True,
                 "PREFER_DATES_FROM": "future",
             },
@@ -381,14 +389,27 @@ class SummaryBot:
         text: str,
     ) -> None:
         try:
-            await self._send_message(
-                chat_id,
-                f"⏰ Reminder for {user_name}:\n\n{text}",
+            application = self.application
+
+            if application is None:
+                logger.warning("Application is not initialized")
+                return
+
+            await application.bot.send_message(
+                chat_id=chat_id,
+                text=f"⏰ Reminder for {user_name}:\n\n{text}",
             )
+
             await self.database.mark_reminder_sent(reminder_id)
+
+            logger.info("Reminder sent successfully: id=%s chat_id=%s", reminder_id, chat_id)
+
         except Exception as exc:
-            await self.application.bot.send_sticker(chat_id=chat_id, sticker=self.settings.fallback_sticker_file_id)
-            logger.error("Failed to send reminder %s: %s", reminder_id, exc)
+            await application.bot.send_sticker(
+                chat_id=chat_id,
+                sticker=self.fallback_sticker_file_id
+            )
+            logger.exception("Failed to send reminder %s", reminder_id)
     
     async def restore_pending_reminders(self) -> None:
         reminders = await self.database.list_pending_reminders()
