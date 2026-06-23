@@ -18,7 +18,7 @@ class ParsedReminder:
     remind_at: datetime
 
 
-def parse_natural_reminder(self, raw_text: str) -> tuple[str, datetime] | None:
+def parse_natural_reminder(raw_text: str) -> ParsedReminder | None:
     """
     Examples:
     /reminder go to pool 4:00 pm
