@@ -276,7 +276,7 @@ class SummaryBot:
             )
             return
 
-        parsed = self.parse_reminder(raw_text)
+        parsed = parse_natural_reminder(raw_text)
 
         if not parsed:
             await message.reply_text(
@@ -287,7 +287,7 @@ class SummaryBot:
             )
             return
 
-        reminder_text, remind_at = parsed
+        text, remind_at = parsed
         now = datetime.now(remind_at.tzinfo)
 
         if remind_at <= now:
@@ -298,7 +298,7 @@ class SummaryBot:
             chat_id=chat.id,
             user_id=user.id,
             user_name=user.full_name,
-            text=reminder_text,
+            text=text,
             remind_at=remind_at,
         )
 
@@ -306,14 +306,14 @@ class SummaryBot:
             self.send_reminder,
             trigger="date",
             run_date=remind_at,
-            args=[reminder_id, chat.id, user.full_name, reminder_text],
+            args=[reminder_id, chat.id, user.full_name, text],
             id=f"reminder-{reminder_id}",
             replace_existing=True,
         )
 
         await message.reply_text(
             f"✅ Reminder set!\n\n"
-            f"Reminder: {reminder_text}\n"
+            f"Reminder: {text}\n"
             f"Time: {remind_at.strftime('%Y-%m-%d %I:%M %p')}"
         )
     
