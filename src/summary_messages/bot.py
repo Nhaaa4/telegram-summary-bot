@@ -276,7 +276,7 @@ class SummaryBot:
             )
             return
 
-        parsed = parse_natural_reminder(raw_text)
+        parsed = parse_natural_reminder(raw_text=raw_text)
 
         if not parsed:
             await message.reply_text(
