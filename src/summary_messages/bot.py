@@ -184,7 +184,7 @@ class SummaryBot:
             )
             return
         if chat.type not in {"group", "supergroup"}:
-            logger.info("Skipping non-group message for chat_id=%s chat_type=%s", chat.id, chat.type, message.sticker)
+            logger.info("Skipping non-group message for chat_id=%s chat_type=%s", chat.id, chat.type)
             return
         text = message.text or message.caption
         if not text:
