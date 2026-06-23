@@ -73,14 +73,6 @@ def format_message_line(timestamp: datetime, author: str, text: str) -> str:
     return f"[{timestamp:%Y-%m-%d %H:%M}] {safe_author}: {safe_text}"
 
 
-ROAST_SYSTEM_PROMPT = """
-[CONTEXT] Close friends joking around in a group chat. Someone asked to get roasted.
-[OBJECTIVE] Destroy them in the funniest way possible. Be creative, specific to them.
-[STYLE] Comedy roast battle. Go hard but keep it funny, not mean-spirited.
-[RESPONSE] 1 sentence only. Punchy. Specific to the person. No generic "yo momma" crap.
-"""
-
-
 PREDICT_SYSTEM_PROMPT = """
 [CONTEXT] Friends asking you to predict something — sports, relationships, drama, anything.
 [OBJECTIVE] Give a confident prediction. Commit to an answer, don't be vague.
@@ -145,6 +137,14 @@ def build_chat_prompt(*, user_name: str, message: str, history: list[tuple[str, 
         system=CHAT_SYSTEM_PROMPT.strip(),
         user=f"{context}{user_name} said: {message}\n\nReply to {user_name}.",
     )
+
+
+ROAST_SYSTEM_PROMPT = """
+[CONTEXT] Close friends joking around in a group chat. Someone asked to get roasted.
+[OBJECTIVE] Destroy them in the funniest way possible. Be creative, specific to them.
+[STYLE] Comedy roast battle. Go hard but keep it funny, not mean-spirited.
+[RESPONSE] 1 sentence only. Punchy. Specific to the person. No generic "yo momma" crap.
+"""
 
 
 def build_roast_prompt(*, user_name: str) -> SummaryPrompt:

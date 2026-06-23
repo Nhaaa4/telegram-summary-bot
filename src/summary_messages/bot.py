@@ -41,7 +41,7 @@ async def _reply_chunked(message, text: str) -> None:
 class SummaryBot:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self.database = Database(settings.sqlite_path)
+        self.database = Database(settings.postgres_url)
         self.client = SummaryClient(settings)
         self.service = SummaryService(settings=settings, database=self.database, client=self.client)
         self.scheduler = AsyncIOScheduler(timezone=settings.timezone_info)
@@ -51,7 +51,7 @@ class SummaryBot:
 
     async def initialize(self) -> None:
         await self.database.initialize()
-        logger.info("Database initialized at %s", self.settings.sqlite_path)
+        logger.info("Database initialized at %s", self.settings.postgres_url)
 
     def build_application(self) -> Application:
         application = (
@@ -117,8 +117,8 @@ class SummaryBot:
             return
         await update.message.reply_text(
             "Commands:\n"
-            "/summary 1m - summarize the last minute\n"
             "/summary - summarize the default window\n"
+            "/summary 1m - summarize the last minute\n"
             "/summary 1h - summarize the last hour\n"
             "/summary 24h - summarize the last 24 hours\n"
             "/daily_summary - force the daily digest now\n"
@@ -184,14 +184,15 @@ class SummaryBot:
             )
             return
         if chat.type not in {"group", "supergroup"}:
-            logger.info("Skipping non-group message for chat_id=%s chat_type=%s", chat.id, chat.type)
+            logger.info("Skipping non-group message for chat_id=%s chat_type=%s", chat.id, chat.type, message.sticker)
             return
         text = message.text or message.caption
         if not text:
             logger.info(
-                "Skipping message without text/caption for chat_id=%s message_id=%s",
+                "Skipping message without text/caption for chat_id=%s message_id=%s, sticker_file_id=%s",
                 chat.id,
                 message.message_id,
+                message.sticker.file_id
             )
             return
 
@@ -332,6 +333,10 @@ class SummaryBot:
             self.conversations[key] = history[-10:]
         except Exception as exc:
             logger.error("Chat reply failed: %s", exc)
+            if self.settings.fallback_sticker_file_id:
+                await message.reply_sticker(self.settings.fallback_sticker_file_id)
+            else:
+                await message.reply_text("I can't answer that right now.")
 
     async def predict_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         message = update.effective_message
@@ -351,6 +356,7 @@ class SummaryBot:
         except Exception as exc:
             logger.error("Prediction failed: %s", exc)
             await message.reply_text("🔮 The crystal ball is cloudy right now. Try again later.")
+            await message.reply_sticker(self.settings.fallback_sticker_file_id)
 
     async def bj_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         message = update.effective_message
@@ -493,9 +499,11 @@ class SummaryBot:
         try:
             roast = await self.client.summarize(prompt)
             await message.reply_text(f"🔥 {mentioned}\n{roast}")
+            await message.reply_sticker(self.settings.fallback_sticker_file_id)
         except Exception as exc:
             logger.error("Roast failed: %s", exc)
             await message.reply_text(f" {mentioned}\nfuck you little boy")
+            await message.reply_sticker(self.settings.fallback_sticker_file_id)
 
     application: Application | None = None
 

@@ -1,54 +1,65 @@
 from __future__ import annotations
 
-import aiosqlite
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
 
+import psycopg
+from psycopg.rows import dict_row
 
 SCHEMA = """
-PRAGMA journal_mode=WAL;
-PRAGMA foreign_keys=ON;
-
 CREATE TABLE IF NOT EXISTS chats (
-    chat_id INTEGER PRIMARY KEY,
+    chat_id BIGINT PRIMARY KEY,
     chat_title TEXT NOT NULL,
-    daily_summary_enabled INTEGER NOT NULL DEFAULT 1,
+    daily_summary_enabled BOOLEAN NOT NULL DEFAULT TRUE,
     daily_summary_time TEXT NOT NULL DEFAULT '23:00',
     timezone TEXT NOT NULL DEFAULT 'UTC',
     summary_language TEXT NOT NULL DEFAULT 'English',
-    updated_at TEXT NOT NULL
+    updated_at TIMESTAMPTZ NOT NULL
 );
 
+CREATE INDEX IF NOT EXISTS idx_chats_daily_summary_enabled ON chats(daily_summary_enabled);
+
 CREATE TABLE IF NOT EXISTS messages (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    chat_id INTEGER NOT NULL,
+    id BIGSERIAL PRIMARY KEY,
+    chat_id BIGINT NOT NULL,
     chat_title TEXT NOT NULL,
-    message_id INTEGER NOT NULL,
-    user_id INTEGER,
+    message_id BIGINT NOT NULL,
+    user_id BIGINT,
     user_name TEXT NOT NULL,
     text TEXT NOT NULL,
-    created_at TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL,
     FOREIGN KEY(chat_id) REFERENCES chats(chat_id) ON DELETE CASCADE,
     UNIQUE(chat_id, message_id)
 );
 
+CREATE INDEX IF NOT EXISTS idx_messages_chat_id_created_at ON messages(chat_id, created_at);
+
 CREATE TABLE IF NOT EXISTS summary_runs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    chat_id INTEGER NOT NULL,
-    window_start TEXT NOT NULL,
-    window_end TEXT NOT NULL,
+    id BIGSERIAL PRIMARY KEY,
+    chat_id BIGINT NOT NULL,
+    window_start TIMESTAMPTZ NOT NULL,
+    window_end TIMESTAMPTZ NOT NULL,
     summary_text TEXT NOT NULL,
-    created_at TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL,
     FOREIGN KEY(chat_id) REFERENCES chats(chat_id) ON DELETE CASCADE
 );
 
-CREATE TRIGGER IF NOT EXISTS delete_old_messages
-AFTER INSERT ON messages
+CREATE OR REPLACE FUNCTION delete_old_messages_fn()
+RETURNS TRIGGER AS $$
 BEGIN
     DELETE FROM messages
-    WHERE created_at < datetime('now', '-2 days');
+    WHERE created_at < NOW() - INTERVAL '7 days';
+
+    RETURN NEW;
 END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS delete_old_messages ON messages;
+
+CREATE TRIGGER delete_old_messages
+AFTER INSERT ON messages
+FOR EACH ROW
+EXECUTE FUNCTION delete_old_messages_fn();
 """
 
 
@@ -74,13 +85,18 @@ class ChatRecord:
 
 
 class Database:
-    def __init__(self, path: Path) -> None:
-        self.path = path
+    def __init__(self, url: str) -> None:
+        self.url = url
+
+    async def get_connection(self) -> psycopg.AsyncConnection:
+        if not self.url.startswith(("postgresql://", "postgres://")):
+            raise ValueError("Invalid database URL. Must start with 'postgresql://'.")
+
+        return await psycopg.AsyncConnection.connect(self.url, row_factory=dict_row)
 
     async def initialize(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        async with aiosqlite.connect(self.path) as conn:
-            await conn.executescript(SCHEMA)
+        async with await self.get_connection() as conn:
+            await conn.execute(SCHEMA)
             await conn.commit()
 
     async def upsert_chat(
@@ -93,14 +109,14 @@ class Database:
         timezone_name: str = "UTC",
         summary_language: str = "English",
     ) -> None:
-        updated_at = datetime.now(timezone.utc).isoformat()
-        async with aiosqlite.connect(self.path) as conn:
+        updated_at = datetime.now(timezone.utc)
+        async with await self.get_connection() as conn:
             await conn.execute(
                 """
                 INSERT INTO chats (
                     chat_id, chat_title, daily_summary_enabled, daily_summary_time,
                     timezone, summary_language, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT(chat_id) DO UPDATE SET
                     chat_title=excluded.chat_title,
                     daily_summary_enabled=excluded.daily_summary_enabled,
@@ -112,7 +128,7 @@ class Database:
                 (
                     chat_id,
                     chat_title,
-                    1 if daily_summary_enabled else 0,
+                    daily_summary_enabled,
                     daily_summary_time,
                     timezone_name,
                     summary_language,
@@ -122,12 +138,13 @@ class Database:
             await conn.commit()
 
     async def store_message(self, message: StoredMessage) -> None:
-        async with aiosqlite.connect(self.path) as conn:
+        async with await self.get_connection() as conn:
             await conn.execute(
                 """
-                INSERT OR IGNORE INTO messages (
+                INSERT INTO messages (
                     chat_id, chat_title, message_id, user_id, user_name, text, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (chat_id, message_id) DO NOTHING
                 """,
                 (
                     message.chat_id,
@@ -136,7 +153,7 @@ class Database:
                     message.user_id,
                     message.user_name,
                     message.text,
-                    message.created_at.astimezone(timezone.utc).isoformat(),
+                    message.created_at.astimezone(timezone.utc),
                 ),
             )
             await conn.commit()
@@ -149,25 +166,23 @@ class Database:
         end: datetime,
         limit: int,
     ) -> list[StoredMessage]:
-        async with aiosqlite.connect(self.path) as conn:
-            conn.row_factory = aiosqlite.Row
+        async with await self.get_connection() as conn:
             cursor = await conn.execute(
                 """
                 SELECT chat_id, chat_title, message_id, user_id, user_name, text, created_at
                 FROM messages
-                WHERE chat_id = ? AND created_at >= ? AND created_at <= ?
+                WHERE chat_id = %s AND created_at >= %s AND created_at <= %s
                 ORDER BY created_at ASC
-                LIMIT ?
+                LIMIT %s
                 """,
                 (
                     chat_id,
-                    start.astimezone(timezone.utc).isoformat(),
-                    end.astimezone(timezone.utc).isoformat(),
+                    start.astimezone(timezone.utc),
+                    end.astimezone(timezone.utc),
                     limit,
                 ),
             )
             rows = await cursor.fetchall()
-            await cursor.close()
         return [
             StoredMessage(
                 chat_id=row["chat_id"],
@@ -176,29 +191,27 @@ class Database:
                 user_id=row["user_id"],
                 user_name=row["user_name"],
                 text=row["text"],
-                created_at=datetime.fromisoformat(row["created_at"]),
+                created_at=row["created_at"],
             )
             for row in rows
         ]
 
     async def list_active_chats(self) -> list[ChatRecord]:
-        async with aiosqlite.connect(self.path) as conn:
-            conn.row_factory = aiosqlite.Row
+        async with await self.get_connection() as conn:
             cursor = await conn.execute(
                 """
                 SELECT chat_id, chat_title, daily_summary_enabled, daily_summary_time, timezone, summary_language
                 FROM chats
-                WHERE daily_summary_enabled = 1
-                ORDER BY chat_title COLLATE NOCASE ASC
+                WHERE daily_summary_enabled = TRUE
+                ORDER BY LOWER(chat_title) ASC
                 """
             )
             rows = await cursor.fetchall()
-            await cursor.close()
         return [
             ChatRecord(
                 chat_id=row["chat_id"],
                 chat_title=row["chat_title"],
-                daily_summary_enabled=bool(row["daily_summary_enabled"]),
+                daily_summary_enabled=row["daily_summary_enabled"],
                 daily_summary_time=row["daily_summary_time"],
                 timezone=row["timezone"],
                 summary_language=row["summary_language"],
@@ -214,18 +227,18 @@ class Database:
         window_end: datetime,
         summary_text: str,
     ) -> None:
-        async with aiosqlite.connect(self.path) as conn:
+        async with await self.get_connection() as conn:
             await conn.execute(
                 """
                 INSERT INTO summary_runs (chat_id, window_start, window_end, summary_text, created_at)
-                VALUES (?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s)
                 """,
                 (
                     chat_id,
-                    window_start.astimezone(timezone.utc).isoformat(),
-                    window_end.astimezone(timezone.utc).isoformat(),
+                    window_start.astimezone(timezone.utc),
+                    window_end.astimezone(timezone.utc),
                     summary_text,
-                    datetime.now(timezone.utc).isoformat(),
+                    datetime.now(timezone.utc),
                 ),
             )
             await conn.commit()

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -18,7 +17,7 @@ def build_settings() -> Settings:
             "LLM_PROVIDER": "ollama",
             "LLM_MODEL": "test-model",
             "OLLAMA_BASE_URL": "http://localhost:11434/v1",
-            "SQLITE_PATH": str(Path("data") / "test.sqlite3"),
+            "POSTGRES_URL": "postgresql://postgres:postgres@postgres:5432/summary_bot_test",
         }
     )
 

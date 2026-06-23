@@ -18,6 +18,7 @@ build/
 .ruff_cache/
 .mypy_cache/
 cache/
+uv.lock
 
 # Data
 data/

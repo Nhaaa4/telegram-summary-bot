@@ -1,1 +1,0 @@
-worker: uv run summary-messages
