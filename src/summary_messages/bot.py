@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import timezone, datetime
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+import dateparser
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, MessageEntity, Update
 from telegram.ext import Application, ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
@@ -16,7 +17,6 @@ from .games import BlackjackGame, coinflip
 from .llm import SummaryClient
 from .prompts import build_chat_prompt, build_joke_prompt, build_predict_prompt, build_roast_prompt
 from .service import SummaryService
-from .reminder import parse_natural_reminder, ParsedReminder
 
 logger = logging.getLogger(__name__)
 
@@ -276,7 +276,7 @@ class SummaryBot:
             )
             return
 
-        parsed = parse_natural_reminder(raw_text=raw_text)
+        parsed = self.parse_reminder(raw_text=raw_text)
 
         if not parsed:
             await message.reply_text(
@@ -287,7 +287,7 @@ class SummaryBot:
             )
             return
 
-        text, remind_at = parsed
+        raw_text, remind_at = parsed
         now = datetime.now(remind_at.tzinfo)
 
         if remind_at <= now:
@@ -298,7 +298,7 @@ class SummaryBot:
             chat_id=chat.id,
             user_id=user.id,
             user_name=user.full_name,
-            text=text,
+            text=raw_text,
             remind_at=remind_at,
         )
 
@@ -306,16 +306,71 @@ class SummaryBot:
             self.send_reminder,
             trigger="date",
             run_date=remind_at,
-            args=[reminder_id, chat.id, user.full_name, text],
+            args=[reminder_id, chat.id, user.full_name, raw_text],
             id=f"reminder-{reminder_id}",
             replace_existing=True,
         )
 
         await message.reply_text(
             f"✅ Reminder set!\n\n"
-            f"Reminder: {text}\n"
+            f"Reminder: {raw_text}\n"
             f"Time: {remind_at.strftime('%Y-%m-%d %I:%M %p')}"
         )
+    
+    
+    def parse_reminder(self, raw_text: str) -> tuple[str, datetime] | None:
+        raw_text = raw_text.strip()
+
+        if not raw_text:
+            return None
+
+        # Common time phrases users may write
+        time_patterns = [
+            r"\bin\s+\d+\s+(?:minute|minutes|hour|hours|day|days)\b",
+            r"\bat\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?(?:\s+tomorrow|\s+tmr)?\b",
+            r"\b\d{1,2}(?::\d{2})?\s*(?:am|pm)(?:\s+tomorrow|\s+tmr)?\b",
+            r"\btomorrow\s+(?:at\s+)?\d{1,2}(?::\d{2})?\s*(?:am|pm)?\b",
+            r"\btmr\s+(?:at\s+)?\d{1,2}(?::\d{2})?\s*(?:am|pm)?\b",
+        ]
+
+        match = None
+
+        for pattern in time_patterns:
+            match = re.search(pattern, raw_text, flags=re.IGNORECASE)
+            if match:
+                break
+
+        if not match:
+            return None
+
+        time_text = match.group(0)
+
+        # Normalize common short word
+        time_text = time_text.replace("tmr", "tomorrow")
+
+        remind_at = dateparser.parse(
+            time_text,
+            settings={
+                "TIMEZONE": self.settings.timezone,
+                "RETURN_AS_TIMEZONE_AWARE": True,
+                "PREFER_DATES_FROM": "future",
+            },
+        )
+
+        if not remind_at:
+            return None
+
+        reminder_text = (
+            raw_text[: match.start()] + raw_text[match.end() :]
+        ).strip()
+
+        reminder_text = re.sub(r"\s+", " ", reminder_text)
+        reminder_text = reminder_text.removeprefix("at ").strip()
+
+        if not reminder_text:
+            reminder_text = "Reminder"
+
+        return reminder_text, remind_at
     
     
     async def send_reminder(
