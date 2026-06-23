@@ -189,10 +189,9 @@ class SummaryBot:
         text = message.text or message.caption
         if not text:
             logger.info(
-                "Skipping message without text/caption for chat_id=%s message_id=%s, sticker_file_id=%s",
+                "Skipping message without text/caption for chat_id=%s message_id=%s",
                 chat.id,
                 message.message_id,
-                message.sticker.file_id
             )
             return
 

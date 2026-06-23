@@ -90,7 +90,7 @@ class Database:
 
     async def get_connection(self) -> psycopg.AsyncConnection:
         if not self.url.startswith(("postgresql://", "postgres://")):
-            raise ValueError("Invalid database URL. Must start with 'postgresql://'.")
+            raise ValueError("Invalid database URL. Must start with 'postgresql://' or 'postgres://'.")
 
         return await psycopg.AsyncConnection.connect(self.url, row_factory=dict_row)
 

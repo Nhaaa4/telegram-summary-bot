@@ -3,12 +3,12 @@ services:
     build: .
     env_file:
       - .env
-    depends_on:
-      - postgres
     restart: unless-stopped
 
   postgres:
     image: postgres:16
+    profiles:
+      - local-db
     environment:
       POSTGRES_DB: summary_bot
       POSTGRES_USER: postgres

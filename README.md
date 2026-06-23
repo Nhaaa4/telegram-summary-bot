@@ -1,10 +1,10 @@
 # Summary Messages
 
-Telegram group summarizer built with Python, `uv`, SQLite, and pluggable LLM providers.
+Telegram group summarizer built with Python, `uv`, Postgres, and pluggable LLM providers.
 
 ## Features
 
-- Stores group messages in SQLite
+- Stores group messages in Postgres
 - Summarizes a custom time window with `/summary 1h`
 - Sends a daily digest automatically
 - Supports English, Khmer, and Sing Khmer / romanized Khmer chat
@@ -22,6 +22,20 @@ Telegram group summarizer built with Python, `uv`, SQLite, and pluggable LLM pro
    uv run summary-messages
    ```
 
+## Docker
+
+Use `POSTGRES_URL` for an external Postgres database such as Supabase, then start the bot:
+
+```bash
+docker compose up --build
+```
+
+If you want a local Postgres container instead, use the optional profile:
+
+```bash
+docker compose --profile local-db up --build
+```
+
 ## Telegram Commands
 
 - `/summary` - summarize the default window
@@ -36,6 +50,6 @@ Telegram group summarizer built with Python, `uv`, SQLite, and pluggable LLM pro
 - `GEMINI_API_KEY` - required when `LLM_PROVIDER=gemini`
 - `OPENROUTER_API_KEY` - required when `LLM_PROVIDER=openrouter`
 - `OLLAMA_BASE_URL` - OpenAI-compatible Ollama endpoint
-- `SQLITE_PATH` - SQLite database location
+- `POSTGRES_URL` - Postgres connection string. For Supabase, use the pooler/direct URL from the project dashboard 
 - `DAILY_SUMMARY_TIME` - daily digest time in 24-hour `HH:MM`
 - `TIMEZONE` - timezone for daily scheduling
