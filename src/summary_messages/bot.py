@@ -5,7 +5,6 @@ import logging
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import timezone, datetime
-from turtle import update
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, MessageEntity, Update
