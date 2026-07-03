@@ -55,6 +55,23 @@ class SummaryClient:
             )
             choice = response.choices[0].message.content or ""
             return choice.strip()
+        
+        if self.settings.llm_provider == "hashn0de":
+            api_key = self.settings.xapi_api_key
+            if not api_key:
+                raise ValueError("XAPI_API_KEY is required when LLM_PROVIDER=xapi")
+            client = OpenAI(api_key=api_key, base_url="https://api.hashn0de.com/v1")
+            response = client.chat.completions.create(
+                model=self.settings.llm_model,
+                messages=[
+                    {"role": "system", "content": prompt.system},
+                    {"role": "user", "content": prompt.user},
+                ],
+                temperature=0.4,
+                max_tokens=700,
+            )
+            choice = response.choices[0].message.content or ""
+            return choice.strip()
 
         if self.settings.llm_provider == "ollama":
             client = OpenAI(api_key="ollama", base_url=self.settings.ollama_base_url)

@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     gemini_api_key4: str | None = Field(default=None, validation_alias="GEMINI_API_KEY4")
     gemini_api_key5: str | None = Field(default=None, validation_alias="GEMINI_API_KEY5")
     openrouter_api_key: str | None = Field(default=None, validation_alias="OPENROUTER_API_KEY")
+    hashn0de_api_key: str | None = Field(default=None, validation_alias="HASHN0DE_API_KEY")
     ollama_base_url: str = Field(default="http://localhost:11434/v1", validation_alias="OLLAMA_BASE_URL")
     hf_token: str | None = Field(default=None, validation_alias="HF_TOKEN")
     
