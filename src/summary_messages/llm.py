@@ -38,6 +38,23 @@ class SummaryClient:
                     last_error = exc
                     continue
             raise last_error  # type: ignore[misc]
+        
+        if self.settings.llm_provider == "openai":
+            api_key = self.settings.openai_api_key
+            if not api_key:
+                raise ValueError("OPENAI_API_KEY is required when LLM_PROVIDER=openai")
+            client = OpenAI(api_key=api_key)
+            response = client.chat.completions.create(
+                model=self.settings.llm_model,
+                messages=[
+                    {"role": "system", "content": prompt.system},
+                    {"role": "user", "content": prompt.user},
+                ],
+                temperature=0.2,
+                max_tokens=500,
+            )
+            choice = response.choices[0].message.content or ""
+            return choice.strip()
 
         if self.settings.llm_provider == "openrouter":
             api_key = self.settings.openrouter_api_key
