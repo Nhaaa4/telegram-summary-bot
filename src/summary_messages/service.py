@@ -73,6 +73,9 @@ class SummaryService:
             end=window.end,
             limit=self.settings.max_messages_per_summary,
         )
+        if not messages:
+            return f"No stored group messages were found for {window.label}."
+
         formatted = self._format_messages(messages, timezone_name)
         prompt = build_summary_prompt(
             chat_title=chat_title,

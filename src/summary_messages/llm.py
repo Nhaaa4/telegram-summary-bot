@@ -73,6 +73,23 @@ class SummaryClient:
             choice = response.choices[0].message.content or ""
             return choice.strip()
 
+        if self.settings.llm_provider == "deepseek":
+            api_key = self.settings.deepseek_api_key
+            if not api_key:
+                raise ValueError("DEEPSEEK_API_KEY is required when LLM_PROVIDER=deepseek")
+            client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
+            response = client.chat.completions.create(
+                model=self.settings.llm_model,
+                messages=[
+                    {"role": "system", "content": prompt.system},
+                    {"role": "user", "content": prompt.user},
+                ],
+                temperature=0.2,
+                max_tokens=700,
+            )
+            choice = response.choices[0].message.content or ""
+            return choice.strip()
+
         if self.settings.llm_provider == "ollama":
             client = OpenAI(api_key="ollama", base_url=self.settings.ollama_base_url)
             response = client.chat.completions.create(
