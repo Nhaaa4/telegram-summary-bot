@@ -779,11 +779,11 @@ class SummaryBot:
         try:
             roast = await self.client.summarize(prompt)
             await message.reply_text(f"🔥 {mentioned}\n{roast}")
-            # await message.reply_sticker(self.settings.fallback_sticker_file_id)
+            await message.reply_sticker(self.settings.fallback_sticker_file_id)
         except Exception as exc:
             logger.error("Roast failed: %s", exc)
             await message.reply_text(f" {mentioned}\nfuck you little boy")
-            # await message.reply_sticker(self.settings.fallback_sticker_file_id)
+            await message.reply_sticker(self.settings.fallback_sticker_file_id)
 
     application: Application | None = None
 
