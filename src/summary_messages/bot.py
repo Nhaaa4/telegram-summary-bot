@@ -8,6 +8,7 @@ from datetime import timezone, datetime
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import dateparser
+from openai import APIStatusError
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, MessageEntity, Update
 from telegram.ext import Application, ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
@@ -40,6 +41,21 @@ async def _reply_chunked(message, text: str) -> None:
         start += 3900
 
 
+def _is_group_chat(chat) -> bool:
+    return bool(chat) and chat.type in {"group", "supergroup"}
+
+
+def _llm_error_message(exc: Exception) -> str:
+    if isinstance(exc, APIStatusError):
+        if exc.status_code == 402:
+            return "The configured LLM account has insufficient balance. Add credits or switch to a different provider/model in .env."
+        if exc.status_code in {401, 403}:
+            return "The configured LLM credentials were rejected. Check the provider key in .env."
+        if exc.status_code == 429:
+            return "The LLM provider is rate-limiting requests right now. Try again in a moment."
+    return "The summary provider failed right now. Try again later or switch to a different provider/model in .env."
+
+
 class SummaryBot:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -63,6 +79,7 @@ class SummaryBot:
             .post_shutdown(self.post_shutdown)
             .build()
         )
+        application.add_error_handler(self.error_handler)
         application.add_handler(CommandHandler("start", self.start_command))
         application.add_handler(CommandHandler("help", self.help_command))
         application.add_handler(CommandHandler("summary", self.summary_command))
@@ -81,6 +98,13 @@ class SummaryBot:
                 self.mention_handler,
             ),
             group=1,
+        )
+        application.add_handler(
+            MessageHandler(
+                filters.TEXT & ~filters.COMMAND,
+                self.private_chat_handler,
+            ),
+            group=2,
         )
         return application
 
@@ -108,6 +132,9 @@ class SummaryBot:
         if self.scheduler.running:
             self.scheduler.shutdown(wait=False)
         logger.info("Bot shutdown complete")
+
+    async def error_handler(self, update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+        logger.exception("Unhandled bot exception", exc_info=context.error)
 
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not update.message:
@@ -140,6 +167,9 @@ class SummaryBot:
         chat = update.effective_chat
         if not message or not chat:
             return
+        if not _is_group_chat(chat):
+            await message.reply_text("This command only works in group chats where I can store messages.")
+            return
 
         window_spec = " ".join(context.args).strip() or self.settings.summary_window_default
         logger.info("Summary requested for chat_id=%s chat_title=%r window=%s", chat.id, chat.title, window_spec)
@@ -162,7 +192,14 @@ class SummaryBot:
         except ValueError as exc:
             logger.warning("Summary request failed for chat_id=%s: %s", chat.id, exc)
             await message.reply_text(str(exc))
-            await message.reply_sticker(sticker=self.settings.fallback_sticker_file_id)
+            if self.settings.fallback_sticker_file_id:
+                await message.reply_sticker(sticker=self.settings.fallback_sticker_file_id)
+            return
+        except Exception as exc:
+            logger.exception("Summary generation failed for chat_id=%s", chat.id)
+            await message.reply_text(_llm_error_message(exc))
+            if self.settings.fallback_sticker_file_id:
+                await message.reply_sticker(sticker=self.settings.fallback_sticker_file_id)
             return
 
         await _reply_chunked(message, f"Summary for {window.label}\n\n{summary}")
@@ -172,6 +209,9 @@ class SummaryBot:
         message = update.effective_message
         chat = update.effective_chat
         if not message or not chat:
+            return
+        if not _is_group_chat(chat):
+            await message.reply_text("This command only works in group chats where I can store messages.")
             return
         logger.info("Manual daily summary requested for chat_id=%s chat_title=%r", chat.id, chat.title)
         await self._send_daily_summary_for_chat(chat.id, chat.title or chat.full_name or str(chat.id))
@@ -188,7 +228,7 @@ class SummaryBot:
                 bool(user),
             )
             return
-        if chat.type not in {"group", "supergroup"}:
+        if not _is_group_chat(chat):
             logger.info("Skipping non-group message for chat_id=%s chat_type=%s", chat.id, chat.type)
             return
         text = message.text or message.caption
@@ -242,9 +282,13 @@ class SummaryBot:
             logger.warning("No chat record found for daily summary chat_id=%s", chat_id)
             return
 
-        summary = await self.service.summarize_daily_chat(chat_record)
-        await self._send_message(chat_id, f"Daily summary for {chat_title}\n\n{summary}")
-        logger.info("Daily summary sent for chat_id=%s chat_title=%r", chat_id, chat_title)
+        try:
+            summary = await self.service.summarize_daily_chat(chat_record)
+            await self._send_message(chat_id, f"Daily summary for {chat_title}\n\n{summary}")
+            logger.info("Daily summary sent for chat_id=%s chat_title=%r", chat_id, chat_title)
+        except Exception as exc:
+            logger.exception("Daily summary failed for chat_id=%s chat_title=%r", chat_id, chat_title)
+            await self._send_message(chat_id, _llm_error_message(exc))
 
     async def _send_message(self, chat_id: int, text: str) -> None:
         application = self.application
@@ -457,6 +501,52 @@ class SummaryBot:
             logger.error("Joke failed: %s", exc)
             await message.reply_text("😂 Why did the chicken cross the road? To get to the other side!")
 
+    async def _reply_with_chat_prompt(
+        self,
+        *,
+        chat_id: int,
+        user_id: int,
+        user_name: str,
+        text: str,
+        message,
+    ) -> None:
+        key = (chat_id, user_id)
+        history = self.conversations.get(key, [])
+
+        await message.reply_chat_action("typing")
+        prompt = build_chat_prompt(user_name=user_name, message=text, history=history)
+        try:
+            reply = await self.client.summarize(prompt)
+            await message.reply_text(reply)
+            history.append((text, reply))
+            self.conversations[key] = history[-10:]
+        except Exception as exc:
+            logger.error("Chat reply failed: %s", exc)
+            await message.reply_text(_llm_error_message(exc))
+            if self.settings.fallback_sticker_file_id:
+                await message.reply_sticker(self.settings.fallback_sticker_file_id)
+
+    async def private_chat_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        message = update.effective_message
+        chat = update.effective_chat
+        user = update.effective_user
+        if not message or not chat or not user:
+            return
+        if chat.type != "private":
+            return
+
+        text = (message.text or message.caption or "").strip()
+        if not text:
+            return
+
+        await self._reply_with_chat_prompt(
+            chat_id=chat.id,
+            user_id=user.id,
+            user_name=user.full_name,
+            text=text,
+            message=message,
+        )
+
     async def mention_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         message = update.effective_message
         chat = update.effective_chat
@@ -488,6 +578,7 @@ class SummaryBot:
         text = text.strip()
 
         if not text:
+            await message.reply_text(f"I'm here @{bot_username}. Tell me what you need.")
             return
 
         key = (chat.id, user.id)
@@ -519,19 +610,13 @@ class SummaryBot:
                 await message.reply_text(f"Yes! {m.capitalize()} is a member of {self.settings.group_name} — a software and design collective of technology students and aspiring developers at the Cambodia Academy of Digital Technology. GitHub: https://github.com/COPPSARY/")
                 return
 
-        await message.reply_chat_action("typing")
-        prompt = build_chat_prompt(user_name=user.full_name, message=text, history=history)
-        try:
-            reply = await self.client.summarize(prompt)
-            await message.reply_text(reply)
-            history.append((text, reply))
-            self.conversations[key] = history[-10:]
-        except Exception as exc:
-            logger.error("Chat reply failed: %s", exc)
-            if self.settings.fallback_sticker_file_id:
-                await message.reply_sticker(self.settings.fallback_sticker_file_id)
-            else:
-                await message.reply_text("I can't answer that right now.")
+        await self._reply_with_chat_prompt(
+            chat_id=chat.id,
+            user_id=user.id,
+            user_name=user.full_name,
+            text=text,
+            message=message,
+        )
 
     async def predict_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         message = update.effective_message

@@ -1,9 +1,16 @@
 from __future__ import annotations
 
+import asyncio
 import logging
+import sys
 
 from .bot import SummaryBot
 from .config import Settings
+
+
+def configure_event_loop() -> None:
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 
 def setup_logging(timezone_name: str = "Asia/Phnom_Penh") -> None:
@@ -40,6 +47,7 @@ def setup_logging(timezone_name: str = "Asia/Phnom_Penh") -> None:
 
 
 def main() -> None:
+    configure_event_loop()
     settings = Settings()
 
     setup_logging(settings.timezone)
