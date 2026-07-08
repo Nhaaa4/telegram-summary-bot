@@ -87,7 +87,7 @@ class SummaryBot:
         application.add_handler(CommandHandler("reminder", self.reminder_command))
         application.add_handler(CommandHandler("bj", self.bj_command))
         application.add_handler(CommandHandler("cf", self.cf_command))
-        application.add_handler(CommandHandler("attack", self.attack_command))
+        application.add_handler(CommandHandler("fuck", self.fuck_command))
         application.add_handler(CommandHandler("predict", self.predict_command))
         application.add_handler(CommandHandler("joke", self.joke_command))
         application.add_handler(CallbackQueryHandler(self.bj_callback, pattern="^bj_"))
@@ -752,13 +752,13 @@ class SummaryBot:
         else:
             await message.reply_text(f"🪙 {result}")
 
-    async def attack_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def fuck_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         message = update.effective_message
         if not message:
             return
 
         if not message.entities:
-            await message.reply_text("Mention someone to roast, e.g. /attack @username")
+            await message.reply_text("Mention someone to roast, e.g. /fuck @username")
             return
 
         mentioned = None
