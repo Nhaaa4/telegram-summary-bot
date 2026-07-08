@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     telegram_bot_token: str = Field(validation_alias="TELEGRAM_BOT_TOKEN")
-    llm_provider: Literal["huggingface", "gemini", "openrouter", "ollama", "hashn0de", "deepseek"] = Field(default="huggingface", validation_alias="LLM_PROVIDER")
+    llm_provider: Literal["huggingface", "gemini", "openrouter", "ollama", "hashn0de", "deepseek", "openai"] = Field(default="huggingface", validation_alias="LLM_PROVIDER")
     llm_model: str = Field(default="gemini-2.5-flash", validation_alias="LLM_MODEL")
     
     gemini_api_key: str | None = Field(default=None, validation_alias="GEMINI_API_KEY")
@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     gemini_api_key3: str | None = Field(default=None, validation_alias="GEMINI_API_KEY3")
     gemini_api_key4: str | None = Field(default=None, validation_alias="GEMINI_API_KEY4")
     gemini_api_key5: str | None = Field(default=None, validation_alias="GEMINI_API_KEY5")
+    openai_api_key: str | None = Field(default=None, validation_alias="OPENAI_API_KEY")
     openrouter_api_key: str | None = Field(default=None, validation_alias="OPENROUTER_API_KEY")
     hashn0de_api_key: str | None = Field(default=None, validation_alias="HASHN0DE_API_KEY")
     deepseek_api_key: str | None = Field(default=None, validation_alias="DEEPSEEK_API_KEY")
