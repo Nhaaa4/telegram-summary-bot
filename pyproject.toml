@@ -10,8 +10,12 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
   "APScheduler>=3.10.4",
-  "dateparser>=1.4.1",
   "google-genai>=0.5.0",
+  "langchain>=0.3.0",
+  "langgraph>=0.2.0",
+  "langgraph-checkpoint-postgres>=2.0.0",
+  "langchain-openai>=0.2.0",
+  "langchain-google-genai>=2.0.0",
   "openai>=1.40.0",
   "psycopg[binary]>=3.3.4",
   "pydantic>=2.8.2",

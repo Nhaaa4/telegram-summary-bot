@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from google import genai
 from openai import OpenAI
 
-from .config import Settings
-from .prompts import SummaryPrompt
+from ..configs import Settings
+from ..models import SummaryPrompt
 
 
 @dataclass(slots=True)
@@ -38,7 +38,7 @@ class SummaryClient:
                     last_error = exc
                     continue
             raise last_error  # type: ignore[misc]
-        
+
         if self.settings.llm_provider == "openai":
             api_key = self.settings.openai_api_key
             if not api_key:
@@ -72,7 +72,7 @@ class SummaryClient:
             )
             choice = response.choices[0].message.content or ""
             return choice.strip()
-        
+
         if self.settings.llm_provider == "hashn0de":
             api_key = self.settings.hashn0de_api_key
             if not api_key:
@@ -108,7 +108,7 @@ class SummaryClient:
             return choice.strip()
 
         if self.settings.llm_provider == "ollama":
-            client = OpenAI(api_key="ollama", base_url=self.settings.ollama_base_url)
+            client = OpenAI(api_key="ollama", base_url="http://localhost:11434/v1")
             response = client.chat.completions.create(
                 model=self.settings.llm_model,
                 messages=[
@@ -119,7 +119,7 @@ class SummaryClient:
             )
             choice = response.choices[0].message.content or ""
             return choice.strip()
-        
+
         if self.settings.llm_provider == "huggingface":
             api_key = self.settings.hf_token
             if not api_key:

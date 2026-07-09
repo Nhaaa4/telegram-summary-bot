@@ -1,10 +1,12 @@
+
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import psycopg
 from psycopg.rows import dict_row
+
+from ..models import ChatRecord, StoredMessage
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS chats (
@@ -59,6 +61,15 @@ CREATE INDEX IF NOT EXISTS idx_reminders_remind_at
 ON reminders(remind_at)
 WHERE is_sent = FALSE;
 
+CREATE TABLE IF NOT EXISTS stickers (
+    id BIGSERIAL PRIMARY KEY,
+    chat_id BIGINT NOT NULL,
+    file_id TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL,
+    FOREIGN KEY(chat_id) REFERENCES chats(chat_id) ON DELETE CASCADE,
+    UNIQUE(chat_id, file_id)
+);
+
 CREATE OR REPLACE FUNCTION delete_old_messages_fn()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -76,27 +87,6 @@ AFTER INSERT ON messages
 FOR EACH ROW
 EXECUTE FUNCTION delete_old_messages_fn();
 """
-
-
-@dataclass(slots=True)
-class StoredMessage:
-    chat_id: int
-    chat_title: str
-    message_id: int
-    user_id: int | None
-    user_name: str
-    text: str
-    created_at: datetime
-
-
-@dataclass(slots=True)
-class ChatRecord:
-    chat_id: int
-    chat_title: str
-    daily_summary_enabled: bool
-    daily_summary_time: str
-    timezone: str
-    summary_language: str
 
 
 class Database:
@@ -258,7 +248,6 @@ class Database:
             )
             await conn.commit()
 
-    
     async def create_reminder(
         self,
         *,
@@ -290,7 +279,6 @@ class Database:
             await conn.commit()
             return row["id"]
 
-
     async def list_pending_reminders(self) -> list[dict]:
         async with await self.get_connection() as conn:
             cursor = await conn.execute(
@@ -303,7 +291,6 @@ class Database:
             )
             return await cursor.fetchall()
 
-
     async def mark_reminder_sent(self, reminder_id: int) -> None:
         async with await self.get_connection() as conn:
             await conn.execute(
@@ -315,3 +302,82 @@ class Database:
                 (reminder_id,),
             )
             await conn.commit()
+
+    async def list_reminders_for_user(self, chat_id: int, user_id: int) -> list[dict]:
+        async with await self.get_connection() as conn:
+            cursor = await conn.execute(
+                """
+                SELECT id, text, remind_at
+                FROM reminders
+                WHERE chat_id = %s AND user_id = %s AND is_sent = FALSE
+                ORDER BY remind_at ASC
+                """,
+                (chat_id, user_id),
+            )
+            return await cursor.fetchall()
+
+    async def delete_reminder(self, reminder_id: int, user_id: int) -> bool:
+        async with await self.get_connection() as conn:
+            cursor = await conn.execute(
+                """
+                DELETE FROM reminders
+                WHERE id = %s AND user_id = %s
+                """,
+                (reminder_id, user_id),
+            )
+            await conn.commit()
+            return cursor.rowcount > 0
+
+    async def update_reminder(
+        self,
+        reminder_id: int,
+        user_id: int,
+        *,
+        text: str | None = None,
+        remind_at: datetime | None = None,
+    ) -> dict | None:
+        async with await self.get_connection() as conn:
+            cursor = await conn.execute(
+                """
+                UPDATE reminders
+                SET text = COALESCE(%s, text),
+                    remind_at = COALESCE(%s, remind_at)
+                WHERE id = %s AND user_id = %s AND is_sent = FALSE
+                RETURNING id, text, remind_at
+                """,
+                (
+                    text,
+                    remind_at.astimezone(timezone.utc) if remind_at else None,
+                    reminder_id,
+                    user_id,
+                ),
+            )
+            row = await cursor.fetchone()
+            await conn.commit()
+            return row
+
+    async def store_sticker(self, *, chat_id: int, file_id: str) -> None:
+        async with await self.get_connection() as conn:
+            await conn.execute(
+                """
+                INSERT INTO stickers (chat_id, file_id, created_at)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (chat_id, file_id) DO NOTHING
+                """,
+                (chat_id, file_id, datetime.now(timezone.utc)),
+            )
+            await conn.commit()
+
+    async def get_random_sticker(self, chat_id: int) -> str | None:
+        async with await self.get_connection() as conn:
+            cursor = await conn.execute(
+                """
+                SELECT file_id FROM stickers
+                WHERE chat_id = %s
+                ORDER BY random()
+                LIMIT 1
+                """,
+                (chat_id,),
+            )
+            row = await cursor.fetchone()
+            return row["file_id"] if row else None

@@ -6,8 +6,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from summary_messages.config import Settings
-from summary_messages.service import SummaryService, SummaryWindow
+from summary_messages.configs import Settings
+from summary_messages.models import SummaryWindow
+from summary_messages.services import SummaryService
 
 
 def build_settings() -> Settings:

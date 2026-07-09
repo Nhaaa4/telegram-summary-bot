@@ -1,23 +1,28 @@
 from __future__ import annotations
 
-import re
 import logging
 from collections import defaultdict
+from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from datetime import timezone, datetime
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-import dateparser
+from langchain_core.messages import HumanMessage, ToolMessage
+from langchain_core.runnables import RunnableConfig
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from openai import APIStatusError
+from psycopg import AsyncConnection
+from psycopg.rows import dict_row
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, MessageEntity, Update
+from telegram.constants import ParseMode
+from telegram.error import BadRequest
 from telegram.ext import Application, ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
-from .config import Settings
-from .db import Database, StoredMessage
-from .games import BlackjackGame, coinflip
-from .llm import SummaryClient
-from .prompts import build_chat_prompt, build_joke_prompt, build_predict_prompt, build_roast_prompt
-from .service import SummaryService
+from ..configs import Settings
+from ..graph import build_chat_model, build_graph, build_tools
+from ..models import StoredMessage
+from ..repositories import Database
+from ..services import BlackjackGame, SummaryClient, SummaryService, build_joke_prompt, build_predict_prompt, build_roast_prompt, coinflip
 
 logger = logging.getLogger(__name__)
 
@@ -30,14 +35,25 @@ class BotRuntime:
     scheduler: AsyncIOScheduler
 
 
+async def _send_markdown(send, text: str) -> None:
+    try:
+        await send(text, parse_mode=ParseMode.MARKDOWN)
+    except BadRequest:
+        await send(text)
+
+
+async def _reply_markdown(message, text: str) -> None:
+    await _send_markdown(message.reply_text, text)
+
+
 async def _reply_chunked(message, text: str) -> None:
     if len(text) <= 3900:
-        await message.reply_text(text)
+        await _reply_markdown(message, text)
         return
 
     start = 0
     while start < len(text):
-        await message.reply_text(text[start : start + 3900])
+        await _reply_markdown(message, text[start : start + 3900])
         start += 3900
 
 
@@ -65,7 +81,9 @@ class SummaryBot:
         self.scheduler = AsyncIOScheduler(timezone=settings.timezone_info)
         self.balances: dict[int, int] = defaultdict(lambda: 1000)
         self._bj_games: dict[tuple[int, int], BlackjackGame] = {}
-        self.conversations: dict[tuple[int, int], list[tuple[str, str]]] = defaultdict(list)
+        self._chat_model = None
+        self._agent_checkpointer: AsyncPostgresSaver | None = None
+        self._checkpointer_stack = AsyncExitStack()
 
     async def initialize(self) -> None:
         await self.database.initialize()
@@ -84,7 +102,6 @@ class SummaryBot:
         application.add_handler(CommandHandler("help", self.help_command))
         application.add_handler(CommandHandler("summary", self.summary_command))
         application.add_handler(CommandHandler("daily_summary", self.daily_summary_command))
-        application.add_handler(CommandHandler("reminder", self.reminder_command))
         application.add_handler(CommandHandler("bj", self.bj_command))
         application.add_handler(CommandHandler("cf", self.cf_command))
         application.add_handler(CommandHandler("fuck", self.fuck_command))
@@ -110,6 +127,20 @@ class SummaryBot:
 
     async def post_init(self, application: Application) -> None:
         await self.initialize()
+        # prepare_threshold=None disables server-side prepared statements — required when
+        # postgres_url goes through a transaction-mode pooler (e.g. Supabase's pooler port),
+        # which can route the same client connection to different backends and orphan
+        # psycopg's cached prepared statements (psycopg.errors.DuplicatePreparedStatement).
+        checkpointer_conn = await self._checkpointer_stack.enter_async_context(
+            await AsyncConnection.connect(
+                self.settings.postgres_url,
+                autocommit=True,
+                prepare_threshold=None,
+                row_factory=dict_row,
+            )
+        )
+        self._agent_checkpointer = AsyncPostgresSaver(conn=checkpointer_conn)
+        await self._agent_checkpointer.setup()
         self.scheduler.add_job(
             self.run_daily_summary,
             trigger="cron",
@@ -131,6 +162,7 @@ class SummaryBot:
     async def post_shutdown(self, application: Application) -> None:
         if self.scheduler.running:
             self.scheduler.shutdown(wait=False)
+        await self._checkpointer_stack.aclose()
         logger.info("Bot shutdown complete")
 
     async def error_handler(self, update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -153,13 +185,12 @@ class SummaryBot:
             "/summary 1h - summarize the last hour\n"
             "/summary 24h - summarize the last 24 hours\n"
             "/daily_summary - force the daily digest now\n"
-            "/reminder <text> at 4 pm tomorrow - set a reminder\n"
             "/bj <bet> - play blackjack\n"
             "/cf - flip a coin\n"
             "/fuck @user - roast a user\n"
             "/predict <question> - AI predicts anything\n"
             "/joke - tell a random joke\n"
-            "@botname - chat with the bot"
+            "@botname - chat with the bot, and ask it to set, list, or cancel reminders"
         )
 
     async def summary_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -231,6 +262,18 @@ class SummaryBot:
         if not _is_group_chat(chat):
             logger.info("Skipping non-group message for chat_id=%s chat_type=%s", chat.id, chat.type)
             return
+        if getattr(message, "sticker", None):
+            await self.database.upsert_chat(
+                chat_id=chat.id,
+                chat_title=chat.title or chat.full_name or str(chat.id),
+                daily_summary_enabled=True,
+                daily_summary_time=self.settings.daily_summary_time,
+                timezone_name=self.settings.timezone,
+                summary_language=self.settings.summary_language,
+            )
+            await self.database.store_sticker(chat_id=chat.id, file_id=message.sticker.file_id)
+            logger.info("Stored sticker chat_id=%s file_id=%s", chat.id, message.sticker.file_id)
+            return
         text = message.text or message.caption
         if not text:
             logger.info(
@@ -295,136 +338,11 @@ class SummaryBot:
         if application is None:
             logger.warning("Cannot send message because application is not initialized for chat_id=%s", chat_id)
             return
-        await application.bot.send_message(chat_id=chat_id, text=text)
-
-    async def reminder_command(
-        self,
-        update: Update,
-        context: ContextTypes.DEFAULT_TYPE,
-    ) -> None:
-        message = update.effective_message
-        chat = update.effective_chat
-        user = update.effective_user
-
-        if not message or not chat or not user:
-            return
-
-        raw_text = " ".join(context.args).strip()
-
-        if not raw_text:
-            await message.reply_text(
-                "Usage:\n"
-                "/reminder go to pool 4:00 pm\n"
-                "/reminder go to pool at 4 pm tomorrow\n"
-                "/reminder drink water in 10 minutes"
-            )
-            return
-
-        parsed = self.parse_reminder(raw_text=raw_text)
-
-        if not parsed:
-            await message.reply_text(
-                "I couldn't understand the reminder time.\n\n"
-                "Try:\n"
-                "/reminder go to pool at 4 pm tomorrow\n"
-                "/reminder drink water in 10 minutes"
-            )
-            return
-
-        raw_text, remind_at = parsed
-        now = datetime.now(remind_at.tzinfo)
-
-        if remind_at <= now:
-            await message.reply_text("Please choose a future time.")
-            return
-
-        reminder_id = await self.database.create_reminder(
-            chat_id=chat.id,
-            user_id=user.id,
-            user_name=user.full_name,
-            text=raw_text,
-            remind_at=remind_at,
+        await _send_markdown(
+            lambda text, **kwargs: application.bot.send_message(chat_id=chat_id, text=text, **kwargs),
+            text,
         )
 
-        self.scheduler.add_job(
-            self.send_reminder,
-            trigger="date",
-            run_date=remind_at,
-            args=[reminder_id, chat.id, user.full_name, raw_text],
-            id=f"reminder-{reminder_id}",
-            replace_existing=True,
-        )
-        
-        logger.info(
-            "Reminder job added: id=reminder-%s run_date=%s scheduler_running=%s",
-            reminder_id,
-            remind_at,
-            self.scheduler.running,
-        )
-
-        await message.reply_text(
-            f"✅ Reminder set!\n\n"
-            f"Reminder: {raw_text}\n"
-            f"Time: {remind_at.strftime('%Y-%m-%d %I:%M %p')}"
-        )
-    
-    
-    def parse_reminder(self, raw_text: str) -> tuple[str, datetime] | None:
-        raw_text = raw_text.strip()
-
-        if not raw_text:
-            return None
-
-        # Common time phrases users may write
-        time_patterns = [
-            r"\bin\s+\d+\s+(?:minute|minutes|hour|hours|day|days)\b",
-            r"\bat\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?(?:\s+tomorrow|\s+tmr)?\b",
-            r"\b\d{1,2}(?::\d{2})?\s*(?:am|pm)(?:\s+tomorrow|\s+tmr)?\b",
-            r"\btomorrow\s+(?:at\s+)?\d{1,2}(?::\d{2})?\s*(?:am|pm)?\b",
-            r"\btmr\s+(?:at\s+)?\d{1,2}(?::\d{2})?\s*(?:am|pm)?\b",
-        ]
-
-        match = None
-
-        for pattern in time_patterns:
-            match = re.search(pattern, raw_text, flags=re.IGNORECASE)
-            if match:
-                break
-
-        if not match:
-            return None
-
-        time_text = match.group(0)
-
-        # Normalize common short word
-        time_text = time_text.replace("tmr", "tomorrow")
-
-        remind_at = dateparser.parse(
-            time_text,
-            settings={
-                "TIMEZONE": self.settings.timezone,
-                "TO_TIMEZONE": self.settings.timezone,
-                "RETURN_AS_TIMEZONE_AWARE": True,
-                "PREFER_DATES_FROM": "future",
-            },
-        )
-
-        if not remind_at:
-            return None
-
-        reminder_text = (
-            raw_text[: match.start()] + raw_text[match.end() :]
-        ).strip()
-
-        reminder_text = re.sub(r"\s+", " ", reminder_text)
-        reminder_text = reminder_text.removeprefix("at ").strip()
-
-        if not reminder_text:
-            reminder_text = "Reminder"
-
-        return reminder_text, remind_at
-    
-    
     async def send_reminder(
         self,
         reminder_id: int,
@@ -448,13 +366,14 @@ class SummaryBot:
 
             logger.info("Reminder sent successfully: id=%s chat_id=%s", reminder_id, chat_id)
 
-        except Exception as exc:
-            await application.bot.send_sticker(
-                chat_id=chat_id,
-                sticker=self.fallback_sticker_file_id
-            )
+        except Exception:
             logger.exception("Failed to send reminder %s", reminder_id)
-    
+            if self.settings.fallback_sticker_file_id:
+                await application.bot.send_sticker(
+                    chat_id=chat_id,
+                    sticker=self.settings.fallback_sticker_file_id,
+                )
+
     async def restore_pending_reminders(self) -> None:
         reminders = await self.database.list_pending_reminders()
         now = datetime.now(timezone.utc)
@@ -486,8 +405,8 @@ class SummaryBot:
             )
 
         logger.info("Restored %s pending reminders", len(reminders))
-    
-    
+
+
     async def joke_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         message = update.effective_message
         if not message:
@@ -496,32 +415,58 @@ class SummaryBot:
         prompt = build_joke_prompt()
         try:
             joke = await self.client.summarize(prompt)
-            await message.reply_text(f"😂 {joke}")
+            await _reply_markdown(message, f"😂 {joke}")
         except Exception as exc:
             logger.error("Joke failed: %s", exc)
             await message.reply_text("😂 Why did the chicken cross the road? To get to the other side!")
 
-    async def _reply_with_chat_prompt(
+    async def _reply_with_agent(
         self,
         *,
         chat_id: int,
+        chat_title: str,
         user_id: int,
         user_name: str,
         text: str,
         message,
+        is_group_chat: bool,
     ) -> None:
-        key = (chat_id, user_id)
-        history = self.conversations.get(key, [])
-
         await message.reply_chat_action("typing")
-        prompt = build_chat_prompt(user_name=user_name, message=text, history=history)
         try:
-            reply = await self.client.summarize(prompt)
-            await message.reply_text(reply)
-            history.append((text, reply))
-            self.conversations[key] = history[-10:]
+            if self._chat_model is None:
+                self._chat_model = build_chat_model(self.settings)
+
+            tools = build_tools(
+                settings=self.settings,
+                database=self.database,
+                chat_id=chat_id,
+                user_id=user_id,
+                user_name=user_name,
+                timezone_name=self.settings.timezone,
+                scheduler=self.scheduler,
+                bot=self,
+            )
+            graph = build_graph(self._chat_model, tools, self.settings.timezone, checkpointer=self._agent_checkpointer)
+
+            # thread_id scopes the checkpointer's memory to this chat group, so the graph
+            # recalls prior turns itself instead of us re-sending history on every call.
+            config: RunnableConfig = {
+                "configurable": {"thread_id": str(chat_id)},
+                "recursion_limit": 10,
+            }
+            messages = [HumanMessage(content=f"{user_name} said: {text}")]
+
+            result = await graph.ainvoke({"messages": messages}, config=config)
+            last_message = result["messages"][-1]
+
+            # send_sticker already sends the sticker itself as a side effect — skip the
+            # redundant text reply so the sticker is the only thing the user sees.
+            if isinstance(last_message, ToolMessage) and last_message.name == "send_sticker":
+                return
+
+            await _reply_markdown(message, last_message.content)
         except Exception as exc:
-            logger.error("Chat reply failed: %s", exc)
+            logger.error("Agent reply failed: %s", exc)
             await message.reply_text(_llm_error_message(exc))
             if self.settings.fallback_sticker_file_id:
                 await message.reply_sticker(self.settings.fallback_sticker_file_id)
@@ -539,12 +484,14 @@ class SummaryBot:
         if not text:
             return
 
-        await self._reply_with_chat_prompt(
+        await self._reply_with_agent(
             chat_id=chat.id,
+            chat_title=chat.title or chat.full_name or str(chat.id),
             user_id=user.id,
             user_name=user.full_name,
             text=text,
             message=message,
+            is_group_chat=False,
         )
 
     async def mention_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -581,22 +528,9 @@ class SummaryBot:
             await message.reply_text(f"I'm here @{bot_username}. Tell me what you need.")
             return
 
-        key = (chat.id, user.id)
-        history = self.conversations.get(key, [])
-
         lower = text.lower()
         members = self.settings.group_members_list
         member_lower = {m.lower() for m in members}
-        creator_keywords = ["who created", "who made", "who build", "who built", "your master", "who owns", "who own", "who is your creator", "who made you", "who created you", "who owns you", "who's your master", "who your master", "your creator"]
-        if any(kw in lower for kw in creator_keywords):
-            member_list = ", ".join(members) if members else ""
-            parts = [f"I was created by the {self.settings.group_name} group."]
-            parts.append(f"{self.settings.group_name} is a software and design project or collective team. Members associated with the project include technology students and aspiring software developers, such as those at the Cambodia Academy of Digital Technology.")
-            if member_list:
-                parts.append(f"Members: {member_list}.")
-            parts.append("GitHub: https://github.com/COPPSARY/")
-            await message.reply_text(" ".join(parts))
-            return
 
         group_name_lower = self.settings.group_name.lower()
         list_keywords = ["list the people", "list members", "list team", "who are the members", "list names", "people i can smash", "all the members", "the members"]
@@ -610,12 +544,14 @@ class SummaryBot:
                 await message.reply_text(f"Yes! {m.capitalize()} is a member of {self.settings.group_name} — a software and design collective of technology students and aspiring developers at the Cambodia Academy of Digital Technology. GitHub: https://github.com/COPPSARY/")
                 return
 
-        await self._reply_with_chat_prompt(
+        await self._reply_with_agent(
             chat_id=chat.id,
+            chat_title=chat.title or chat.full_name or str(chat.id),
             user_id=user.id,
             user_name=user.full_name,
             text=text,
             message=message,
+            is_group_chat=True,
         )
 
     async def predict_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -632,7 +568,7 @@ class SummaryBot:
         prompt = build_predict_prompt(question=question)
         try:
             prediction = await self.client.summarize(prompt)
-            await message.reply_text(f"🔮 Prediction: {question}\n\n{prediction}")
+            await _reply_markdown(message, f"🔮 Prediction: {question}\n\n{prediction}")
         except Exception as exc:
             logger.error("Prediction failed: %s", exc)
             await message.reply_text("🔮 The crystal ball is cloudy right now. Try again later.")
@@ -778,7 +714,7 @@ class SummaryBot:
         prompt = build_roast_prompt(user_name=mentioned)
         try:
             roast = await self.client.summarize(prompt)
-            await message.reply_text(f"🔥 {mentioned}\n{roast}")
+            await _reply_markdown(message, f"🔥 {mentioned}\n{roast}")
             await message.reply_sticker(self.settings.fallback_sticker_file_id)
         except Exception as exc:
             logger.error("Roast failed: %s", exc)

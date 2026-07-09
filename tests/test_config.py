@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from summary_messages.config import Settings
+from summary_messages.configs import Settings
 
 
 def test_settings_accept_deepseek_provider() -> None:

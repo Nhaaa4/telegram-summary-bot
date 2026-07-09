@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     telegram_bot_token: str = Field(validation_alias="TELEGRAM_BOT_TOKEN")
     llm_provider: Literal["huggingface", "gemini", "openrouter", "ollama", "hashn0de", "deepseek", "openai"] = Field(default="huggingface", validation_alias="LLM_PROVIDER")
     llm_model: str = Field(default="gemini-2.5-flash", validation_alias="LLM_MODEL")
-    
+
     gemini_api_key: str | None = Field(default=None, validation_alias="GEMINI_API_KEY")
     gemini_api_key2: str | None = Field(default=None, validation_alias="GEMINI_API_KEY2")
     gemini_api_key3: str | None = Field(default=None, validation_alias="GEMINI_API_KEY3")
@@ -25,20 +25,20 @@ class Settings(BaseSettings):
     openrouter_api_key: str | None = Field(default=None, validation_alias="OPENROUTER_API_KEY")
     hashn0de_api_key: str | None = Field(default=None, validation_alias="HASHN0DE_API_KEY")
     deepseek_api_key: str | None = Field(default=None, validation_alias="DEEPSEEK_API_KEY")
-    ollama_base_url: str = Field(default="http://localhost:11434/v1", validation_alias="OLLAMA_BASE_URL")
     hf_token: str | None = Field(default=None, validation_alias="HF_TOKEN")
-    
+
     postgres_url: str = Field(default="postgresql://postgres:postgres@postgres:5432/summary_bot", validation_alias="POSTGRES_URL")
 
     summary_language: str = Field(default="English", validation_alias="SUMMARY_LANGUAGE")
     summary_window_default: str = Field(default="24h", validation_alias="SUMMARY_WINDOW_DEFAULT")
-    
+
     daily_summary_time: str = Field(default="23:00", validation_alias="DAILY_SUMMARY_TIME")
     timezone: str = Field(default="Asia/Phnom_Penh", validation_alias="TIMEZONE")
     max_messages_per_summary: int = Field(default=120, validation_alias="MAX_MESSAGES_PER_SUMMARY")
 
     group_name: str = Field(default="COPPSARY", validation_alias="GROUP_NAME")
     group_members: str = Field(default="", validation_alias="GROUP_MEMBERS")
+    group_github_url: str = Field(default="https://github.com/COPPSARY/", validation_alias="GROUP_GITHUB_URL")
     fallback_sticker_file_id: str | None = Field(default=None, validation_alias="FALLBACK_STICKER_FILE_ID")
 
     @property

@@ -5,7 +5,7 @@ import logging
 import sys
 
 from .bot import SummaryBot
-from .config import Settings
+from .configs import Settings
 
 
 def configure_event_loop() -> None:

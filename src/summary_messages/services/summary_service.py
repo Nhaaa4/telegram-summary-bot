@@ -1,24 +1,17 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from zoneinfo import ZoneInfo
 
-from .config import Settings
-from .db import ChatRecord, Database, StoredMessage
-from .llm import SummaryClient
+from ..configs import Settings
+from ..models import ChatRecord, StoredMessage, SummaryWindow
+from ..repositories import Database
+from .llm_client import SummaryClient
 from .prompts import build_summary_prompt, format_message_line
 
 _DURATION_RE = re.compile(r"^(?P<value>\d+)\s*(?P<unit>[mhdw])$", re.IGNORECASE)
-
-
-@dataclass(slots=True)
-class SummaryWindow:
-    label: str
-    start: datetime
-    end: datetime
 
 
 class SummaryService:
