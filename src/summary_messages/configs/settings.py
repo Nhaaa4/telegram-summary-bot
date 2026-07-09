@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     hashn0de_api_key: str | None = Field(default=None, validation_alias="HASHN0DE_API_KEY")
     deepseek_api_key: str | None = Field(default=None, validation_alias="DEEPSEEK_API_KEY")
     hf_token: str | None = Field(default=None, validation_alias="HF_TOKEN")
+    tavily_api_key: str | None = Field(default=None, validation_alias="TAVILY_API_KEY")
 
     postgres_url: str = Field(default="postgresql://postgres:postgres@postgres:5432/summary_bot", validation_alias="POSTGRES_URL")
 

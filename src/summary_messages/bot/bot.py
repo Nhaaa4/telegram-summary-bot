@@ -22,7 +22,7 @@ from ..configs import Settings
 from ..graph import build_chat_model, build_graph, build_tools
 from ..models import StoredMessage
 from ..repositories import Database
-from ..services import BlackjackGame, SummaryClient, SummaryService, build_joke_prompt, build_predict_prompt, build_roast_prompt, coinflip
+from ..services import BlackjackGame, SummaryClient, SummaryService, build_joke_prompt, build_predict_prompt, build_quote_prompt, build_roast_prompt, coinflip
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +107,7 @@ class SummaryBot:
         application.add_handler(CommandHandler("fuck", self.fuck_command))
         application.add_handler(CommandHandler("predict", self.predict_command))
         application.add_handler(CommandHandler("joke", self.joke_command))
+        application.add_handler(CommandHandler("quote", self.quote_command))
         application.add_handler(CallbackQueryHandler(self.bj_callback, pattern="^bj_"))
         application.add_handler(MessageHandler(~filters.COMMAND, self.store_message))
         application.add_handler(
@@ -190,6 +191,7 @@ class SummaryBot:
             "/fuck @user - roast a user\n"
             "/predict <question> - AI predicts anything\n"
             "/joke - tell a random joke\n"
+            "/quote - get today's quote\n"
             "@botname - chat with the bot, and ask it to set, list, or cancel reminders"
         )
 
@@ -419,6 +421,19 @@ class SummaryBot:
         except Exception as exc:
             logger.error("Joke failed: %s", exc)
             await message.reply_text("😂 Why did the chicken cross the road? To get to the other side!")
+
+    async def quote_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        message = update.effective_message
+        if not message:
+            return
+        await message.reply_chat_action("typing")
+        prompt = build_quote_prompt()
+        try:
+            quote = await self.client.summarize(prompt)
+            await _reply_markdown(message, f"💬 {quote}")
+        except Exception as exc:
+            logger.error("Quote failed: %s", exc)
+            await message.reply_text('💬 "The only way to do great work is to love what you do." — Steve Jobs')
 
     async def _reply_with_agent(
         self,

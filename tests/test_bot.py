@@ -146,6 +146,35 @@ async def test_summary_command_handles_provider_errors() -> None:
 
 
 @pytest.mark.asyncio
+async def test_quote_command_replies_with_client_result() -> None:
+    bot = SummaryBot(build_settings())
+    bot.client = SimpleNamespace(summarize=AsyncMock(return_value='"Stay hungry, stay foolish." — Steve Jobs'))
+
+    message = SimpleNamespace(reply_chat_action=AsyncMock(), reply_text=AsyncMock())
+    update = SimpleNamespace(effective_message=message)
+
+    await bot.quote_command(update, None)
+
+    message.reply_text.assert_awaited_once_with(
+        '💬 "Stay hungry, stay foolish." — Steve Jobs', parse_mode=ParseMode.MARKDOWN
+    )
+
+
+@pytest.mark.asyncio
+async def test_quote_command_falls_back_on_provider_error() -> None:
+    bot = SummaryBot(build_settings())
+    bot.client = SimpleNamespace(summarize=AsyncMock(side_effect=RuntimeError("provider failure")))
+
+    message = SimpleNamespace(reply_chat_action=AsyncMock(), reply_text=AsyncMock())
+    update = SimpleNamespace(effective_message=message)
+
+    await bot.quote_command(update, None)
+
+    message.reply_text.assert_awaited_once()
+    assert "Steve Jobs" in message.reply_text.await_args.args[0]
+
+
+@pytest.mark.asyncio
 async def test_private_chat_handler_replies_to_private_text() -> None:
     bot = SummaryBot(build_settings())
     bot._chat_model = SimpleNamespace()

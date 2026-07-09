@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -144,6 +144,20 @@ async def test_list_reminders_formats_rows() -> None:
 
 
 @pytest.mark.asyncio
+async def test_list_reminders_converts_utc_to_local_timezone() -> None:
+    tools, database, _, _ = build_tool_set(timezone_name="Asia/Phnom_Penh")
+    # Stored in UTC (as it always is); local Asia/Phnom_Penh (UTC+7) should show 19:00, not 12:00.
+    database.list_reminders_for_user = AsyncMock(
+        return_value=[{"id": 1, "text": "submit report", "remind_at": datetime(2026, 7, 11, 12, 0, tzinfo=timezone.utc)}]
+    )
+
+    result = await tools["list_reminders"].ainvoke({})
+
+    assert "07:00 PM" in result
+    assert "12:00" not in result
+
+
+@pytest.mark.asyncio
 async def test_list_reminders_empty() -> None:
     tools, _, _, _ = build_tool_set()
 
@@ -185,6 +199,19 @@ async def test_update_reminder_text_only() -> None:
 
     database.update_reminder.assert_awaited_once_with(1, 99, text="check the stove", remind_at=None)
     assert "Reminder #1 updated" in result
+
+
+@pytest.mark.asyncio
+async def test_update_reminder_converts_utc_to_local_timezone() -> None:
+    tools, database, _, _ = build_tool_set(timezone_name="Asia/Phnom_Penh")
+    database.update_reminder = AsyncMock(
+        return_value={"id": 1, "text": "submit report", "remind_at": datetime(2026, 7, 11, 12, 0, tzinfo=timezone.utc)}
+    )
+
+    result = await tools["update_reminder"].ainvoke({"reminder_id": 1, "text": "submit report"})
+
+    assert "07:00 PM" in result
+    assert "12:00" not in result
 
 
 @pytest.mark.asyncio
@@ -286,3 +313,101 @@ async def test_send_sticker_reports_none_available() -> None:
 
     bot.application.bot.send_sticker.assert_not_awaited()
     assert "No sticker available" in result
+
+
+def test_web_search_omitted_without_tavily_api_key() -> None:
+    tools, _, _, _ = build_tool_set(settings=build_settings(TAVILY_API_KEY=None))
+
+    assert "web_search" not in tools
+
+
+@pytest.mark.asyncio
+async def test_web_search_returns_answer_and_results() -> None:
+    fake_client = SimpleNamespace(
+        search=AsyncMock(
+            return_value={
+                "answer": "It's sunny today.",
+                "results": [{"title": "Weather", "url": "https://example.com", "content": "Sunny, 30C " * 20}],
+            }
+        )
+    )
+    with patch("summary_messages.graph.tools.AsyncTavilyClient", return_value=fake_client):
+        tools, _, _, _ = build_tool_set(settings=build_settings(TAVILY_API_KEY="test-key"))
+
+        result = await tools["web_search"].ainvoke({"query": "weather today"})
+
+    fake_client.search.assert_awaited_once_with("weather today", max_results=5, include_answer=True)
+    assert "It's sunny today." in result
+    assert "Weather" in result
+    assert "example.com" in result
+
+
+@pytest.mark.asyncio
+async def test_web_search_reports_failure() -> None:
+    fake_client = SimpleNamespace(search=AsyncMock(side_effect=RuntimeError("network error")))
+    with patch("summary_messages.graph.tools.AsyncTavilyClient", return_value=fake_client):
+        tools, _, _, _ = build_tool_set(settings=build_settings(TAVILY_API_KEY="test-key"))
+
+        result = await tools["web_search"].ainvoke({"query": "weather today"})
+
+    assert "Web search failed" in result
+
+
+class _FakeWeatherResponse:
+    def __init__(self, payload: dict) -> None:
+        self._payload = payload
+
+    def raise_for_status(self) -> None:
+        pass
+
+    def json(self) -> dict:
+        return self._payload
+
+
+class _FakeWeatherClient:
+    def __init__(self, payload: dict | None = None, error: Exception | None = None) -> None:
+        self._payload = payload
+        self._error = error
+
+    async def __aenter__(self) -> "_FakeWeatherClient":
+        return self
+
+    async def __aexit__(self, *args) -> None:
+        pass
+
+    async def get(self, *args, **kwargs) -> _FakeWeatherResponse:
+        if self._error:
+            raise self._error
+        return _FakeWeatherResponse(self._payload)
+
+
+@pytest.mark.asyncio
+async def test_get_weather_returns_summary() -> None:
+    payload = {
+        "current": {
+            "temperature_2m": 32.0,
+            "apparent_temperature": 37.5,
+            "relative_humidity_2m": 60,
+            "weather_code": 1,
+            "wind_speed_10m": 12.3,
+        }
+    }
+    with patch("summary_messages.graph.tools.httpx.AsyncClient", return_value=_FakeWeatherClient(payload=payload)):
+        tools, _, _, _ = build_tool_set()
+        result = await tools["get_weather"].ainvoke({})
+
+    assert "Phnom Penh" in result
+    assert "mostly clear" in result
+    assert "32.0" in result
+
+
+@pytest.mark.asyncio
+async def test_get_weather_reports_failure() -> None:
+    with patch(
+        "summary_messages.graph.tools.httpx.AsyncClient",
+        return_value=_FakeWeatherClient(error=RuntimeError("network error")),
+    ):
+        tools, _, _, _ = build_tool_set()
+        result = await tools["get_weather"].ainvoke({})
+
+    assert "Couldn't fetch the weather" in result

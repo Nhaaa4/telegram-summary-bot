@@ -4,14 +4,33 @@ import logging
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+import httpx
 from apscheduler.jobstores.base import JobLookupError
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from langchain_core.tools import BaseTool, tool
+from tavily import AsyncTavilyClient
 
 from ..configs import Settings
 from ..repositories import Database
 
 logger = logging.getLogger(__name__)
+
+# Phnom Penh, Cambodia.
+_PHNOM_PENH_LATITUDE = 11.5564
+_PHNOM_PENH_LONGITUDE = 104.9282
+
+# WMO weather codes (https://open-meteo.com/en/docs), collapsed to plain-English labels.
+_WEATHER_CODES = {
+    0: "clear sky", 1: "mostly clear", 2: "partly cloudy", 3: "overcast",
+    45: "fog", 48: "depositing rime fog",
+    51: "light drizzle", 53: "moderate drizzle", 55: "dense drizzle",
+    61: "light rain", 63: "moderate rain", 65: "heavy rain",
+    66: "light freezing rain", 67: "heavy freezing rain",
+    71: "light snow", 73: "moderate snow", 75: "heavy snow", 77: "snow grains",
+    80: "light rain showers", 81: "moderate rain showers", 82: "violent rain showers",
+    85: "light snow showers", 86: "heavy snow showers",
+    95: "thunderstorm", 96: "thunderstorm with light hail", 99: "thunderstorm with heavy hail",
+}
 
 _WEEKDAYS = {
     "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
@@ -128,8 +147,9 @@ def build_tools(
         if not reminders:
             logger.info("tool result: list_reminders found none")
             return "No pending reminders."
+        tz = ZoneInfo(timezone_name)
         lines = [
-            f"#{r['id']} — {r['text']} at {r['remind_at'].strftime('%Y-%m-%d %I:%M %p')}"
+            f"#{r['id']} — {r['text']} at {r['remind_at'].astimezone(tz).strftime('%Y-%m-%d %I:%M %p')}"
             for r in reminders
         ]
         logger.info("tool result: list_reminders found %s", len(reminders))
@@ -227,7 +247,8 @@ def build_tools(
             )
 
         logger.info("tool result: update_reminder updated id=%s remind_at=%s", reminder_id, row["remind_at"])
-        return f"Reminder #{reminder_id} updated: {row['text']} at {row['remind_at'].strftime('%Y-%m-%d %I:%M %p')}"
+        local_remind_at = row["remind_at"].astimezone(ZoneInfo(timezone_name))
+        return f"Reminder #{reminder_id} updated: {row['text']} at {local_remind_at.strftime('%Y-%m-%d %I:%M %p')}"
 
     @tool(description="Answer questions about who created, made, built, or owns this bot.")
     async def about_creator() -> str:
@@ -281,11 +302,88 @@ def build_tools(
         logger.info("tool result: send_sticker sent mood=%r source=%s", mood, source)
         return f"Sent a {mood} sticker."
 
-    return [
+    @tool(description="Get today's weather in Phnom Penh, Cambodia.")
+    async def get_weather() -> str:
+        """Get the current weather in Phnom Penh, Cambodia.
+
+        Returns:
+            A short weather summary (conditions, temperature, feels-like, humidity, wind),
+            or an explanation if the weather service failed.
+        """
+        logger.info("tool call: get_weather chat_id=%s", chat_id)
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                response = await client.get(
+                    "https://api.open-meteo.com/v1/forecast",
+                    params={
+                        "latitude": _PHNOM_PENH_LATITUDE,
+                        "longitude": _PHNOM_PENH_LONGITUDE,
+                        "current": "temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m",
+                        "timezone": "Asia/Bangkok",
+                    },
+                )
+                response.raise_for_status()
+                current = response.json()["current"]
+        except Exception as exc:
+            logger.warning("tool result: get_weather failed error=%s", exc)
+            return "Couldn't fetch the weather right now — try again in a bit."
+
+        condition = _WEATHER_CODES.get(current["weather_code"], "unknown conditions")
+        summary = (
+            f"Phnom Penh: {condition}, {current['temperature_2m']}°C "
+            f"(feels like {current['apparent_temperature']}°C), "
+            f"{current['relative_humidity_2m']}% humidity, wind {current['wind_speed_10m']} km/h."
+        )
+        logger.info("tool result: get_weather succeeded")
+        return summary
+
+    tools: list[BaseTool] = [
         create_reminder,
         list_reminders,
         cancel_reminder,
         update_reminder,
         about_creator,
         send_sticker,
+        get_weather,
     ]
+
+    if settings.tavily_api_key:
+        tavily_client = AsyncTavilyClient(api_key=settings.tavily_api_key)
+
+        @tool(description="Search the web for current information.")
+        async def web_search(query: str) -> str:
+            """Search the web for current information — news, facts, prices, scores, anything
+            you don't already know or that could have changed since your training.
+
+            Args:
+                query: What to search for. Keep it short and specific, like a search engine query.
+            Returns:
+                A short answer plus a few source snippets, or an explanation if the search failed.
+            """
+            logger.info("tool call: web_search query=%r chat_id=%s", query, chat_id)
+            try:
+                response = await tavily_client.search(query, max_results=5, include_answer=True)
+            except Exception as exc:
+                logger.warning("tool result: web_search failed query=%r error=%s", query, exc)
+                return "Web search failed right now — answer from what you already know, or say you're not sure."
+
+            parts = []
+            answer = response.get("answer")
+            if answer:
+                parts.append(answer)
+            for result in response.get("results", [])[:5]:
+                title = result.get("title", "").strip()
+                url = result.get("url", "").strip()
+                content = " ".join(result.get("content", "").split())[:300]
+                parts.append(f"- {title} ({url}): {content}")
+
+            if not parts:
+                logger.info("tool result: web_search found nothing query=%r", query)
+                return f"No web results found for '{query}'."
+
+            logger.info("tool result: web_search succeeded query=%r results=%s", query, len(response.get("results", [])))
+            return "\n".join(parts)
+
+        tools.append(web_search)
+
+    return tools
