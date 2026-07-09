@@ -201,6 +201,28 @@ class Database:
             for row in rows
         ]
 
+    async def get_chat(self, chat_id: int) -> ChatRecord | None:
+        async with await self.get_connection() as conn:
+            cursor = await conn.execute(
+                """
+                SELECT chat_id, chat_title, daily_summary_enabled, daily_summary_time, timezone, summary_language
+                FROM chats
+                WHERE chat_id = %s
+                """,
+                (chat_id,),
+            )
+            row = await cursor.fetchone()
+        if not row:
+            return None
+        return ChatRecord(
+            chat_id=row["chat_id"],
+            chat_title=row["chat_title"],
+            daily_summary_enabled=row["daily_summary_enabled"],
+            daily_summary_time=row["daily_summary_time"],
+            timezone=row["timezone"],
+            summary_language=row["summary_language"],
+        )
+
     async def list_active_chats(self) -> list[ChatRecord]:
         async with await self.get_connection() as conn:
             cursor = await conn.execute(

@@ -61,6 +61,10 @@ def _is_group_chat(chat) -> bool:
     return bool(chat) and chat.type in {"group", "supergroup"}
 
 
+def _chat_display_name(chat) -> str:
+    return chat.title or chat.full_name or str(chat.id)
+
+
 def _extract_reply_text(content) -> str:
     # Some providers (e.g. Gemini/Gemma "thinking" models via ChatGoogleGenerativeAI) return
     # message.content as a list of content blocks (reasoning + text) instead of a plain
@@ -101,10 +105,21 @@ class SummaryBot:
         self._chat_model = None
         self._agent_checkpointer: AsyncPostgresSaver | None = None
         self._checkpointer_stack = AsyncExitStack()
+        self.application: Application | None = None
 
     async def initialize(self) -> None:
         await self.database.initialize()
         logger.info("Database initialized at %s", self.settings.postgres_url)
+
+    async def _upsert_chat_from(self, chat) -> None:
+        await self.database.upsert_chat(
+            chat_id=chat.id,
+            chat_title=_chat_display_name(chat),
+            daily_summary_enabled=True,
+            daily_summary_time=self.settings.daily_summary_time,
+            timezone_name=self.settings.timezone,
+            summary_language=self.settings.summary_language,
+        )
 
     def build_application(self) -> Application:
         application = (
@@ -223,18 +238,11 @@ class SummaryBot:
 
         window_spec = " ".join(context.args).strip() or self.settings.summary_window_default
         logger.info("Summary requested for chat_id=%s chat_title=%r window=%s", chat.id, chat.title, window_spec)
-        await self.database.upsert_chat(
-            chat_id=chat.id,
-            chat_title=chat.title or chat.full_name or str(chat.id),
-            daily_summary_enabled=True,
-            daily_summary_time=self.settings.daily_summary_time,
-            timezone_name=self.settings.timezone,
-            summary_language=self.settings.summary_language,
-        )
+        await self._upsert_chat_from(chat)
         try:
             window, summary = await self.service.summarize_chat(
                 chat_id=chat.id,
-                chat_title=chat.title or chat.full_name or str(chat.id),
+                chat_title=_chat_display_name(chat),
                 window_spec=window_spec,
                 output_language=self.settings.summary_language,
                 timezone_name=self.settings.timezone,
@@ -264,7 +272,7 @@ class SummaryBot:
             await message.reply_text("This command only works in group chats where I can store messages.")
             return
         logger.info("Manual daily summary requested for chat_id=%s chat_title=%r", chat.id, chat.title)
-        await self._send_daily_summary_for_chat(chat.id, chat.title or chat.full_name or str(chat.id))
+        await self._send_daily_summary_for_chat(chat.id, _chat_display_name(chat))
 
     async def store_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         message = update.effective_message
@@ -282,14 +290,7 @@ class SummaryBot:
             logger.info("Skipping non-group message for chat_id=%s chat_type=%s", chat.id, chat.type)
             return
         if getattr(message, "sticker", None):
-            await self.database.upsert_chat(
-                chat_id=chat.id,
-                chat_title=chat.title or chat.full_name or str(chat.id),
-                daily_summary_enabled=True,
-                daily_summary_time=self.settings.daily_summary_time,
-                timezone_name=self.settings.timezone,
-                summary_language=self.settings.summary_language,
-            )
+            await self._upsert_chat_from(chat)
             await self.database.store_sticker(chat_id=chat.id, file_id=message.sticker.file_id)
             logger.info("Stored sticker chat_id=%s file_id=%s", chat.id, message.sticker.file_id)
             return
@@ -302,18 +303,12 @@ class SummaryBot:
             )
             return
 
-        await self.database.upsert_chat(
-            chat_id=chat.id,
-            chat_title=chat.title or chat.full_name or str(chat.id),
-            daily_summary_enabled=True,
-            daily_summary_time=self.settings.daily_summary_time,
-            timezone_name=self.settings.timezone,
-            summary_language=self.settings.summary_language,
-        )
+        chat_title = _chat_display_name(chat)
+        await self._upsert_chat_from(chat)
         await self.database.store_message(
             StoredMessage(
                 chat_id=chat.id,
-                chat_title=chat.title or chat.full_name or str(chat.id),
+                chat_title=chat_title,
                 message_id=message.message_id,
                 user_id=user.id,
                 user_name=user.full_name,
@@ -324,7 +319,7 @@ class SummaryBot:
         logger.info(
             "Stored message chat_id=%s chat_title=%r message_id=%s user_id=%s text_length=%s",
             chat.id,
-            chat.title or chat.full_name or str(chat.id),
+            chat_title,
             message.message_id,
             user.id,
             len(text),
@@ -338,8 +333,7 @@ class SummaryBot:
 
     async def _send_daily_summary_for_chat(self, chat_id: int, chat_title: str, chat_record=None) -> None:
         if chat_record is None:
-            chats = await self.database.list_active_chats()
-            chat_record = next((chat for chat in chats if chat.chat_id == chat_id), None)
+            chat_record = await self.database.get_chat(chat_id)
         if chat_record is None:
             logger.warning("No chat record found for daily summary chat_id=%s", chat_id)
             return
@@ -424,7 +418,6 @@ class SummaryBot:
             )
 
         logger.info("Restored %s pending reminders", len(reminders))
-
 
     async def joke_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         message = update.effective_message
@@ -518,7 +511,7 @@ class SummaryBot:
 
         await self._reply_with_agent(
             chat_id=chat.id,
-            chat_title=chat.title or chat.full_name or str(chat.id),
+            chat_title=_chat_display_name(chat),
             user_id=user.id,
             user_name=user.full_name,
             text=text,
@@ -560,25 +553,9 @@ class SummaryBot:
             await message.reply_text(f"I'm here @{bot_username}. Tell me what you need.")
             return
 
-        lower = text.lower()
-        members = self.settings.group_members_list
-        member_lower = {m.lower() for m in members}
-
-        group_name_lower = self.settings.group_name.lower()
-        list_keywords = ["list the people", "list members", "list team", "who are the members", "list names", "people i can smash", "all the members", "the members"]
-        if any(kw in lower for kw in list_keywords) and group_name_lower in lower:
-            member_list = ", ".join(members) if members else "No members configured."
-            await message.reply_text(f"Members of {self.settings.group_name}: {member_list}.")
-            return
-
-        for m in member_lower:
-            if m in lower and ("do you know" in lower or "who is" in lower or "tell me about" in lower):
-                await message.reply_text(f"Yes! {m.capitalize()} is a member of {self.settings.group_name} — a software and design collective of technology students and aspiring developers at the Cambodia Academy of Digital Technology. GitHub: https://github.com/COPPSARY/")
-                return
-
         await self._reply_with_agent(
             chat_id=chat.id,
-            chat_title=chat.title or chat.full_name or str(chat.id),
+            chat_title=_chat_display_name(chat),
             user_id=user.id,
             user_name=user.full_name,
             text=text,
@@ -604,7 +581,8 @@ class SummaryBot:
         except Exception as exc:
             logger.error("Prediction failed: %s", exc)
             await message.reply_text("🔮 The crystal ball is cloudy right now. Try again later.")
-            await message.reply_sticker(self.settings.fallback_sticker_file_id)
+            if self.settings.fallback_sticker_file_id:
+                await message.reply_sticker(self.settings.fallback_sticker_file_id)
 
     async def bj_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         message = update.effective_message
@@ -747,13 +725,13 @@ class SummaryBot:
         try:
             roast = await self.client.summarize(prompt)
             await _reply_markdown(message, f"🔥 {mentioned}\n{roast}")
-            await message.reply_sticker(self.settings.fallback_sticker_file_id)
+            if self.settings.fallback_sticker_file_id:
+                await message.reply_sticker(self.settings.fallback_sticker_file_id)
         except Exception as exc:
             logger.error("Roast failed: %s", exc)
             await message.reply_text(f" {mentioned}\nfuck you little boy")
-            await message.reply_sticker(self.settings.fallback_sticker_file_id)
-
-    application: Application | None = None
+            if self.settings.fallback_sticker_file_id:
+                await message.reply_sticker(self.settings.fallback_sticker_file_id)
 
     def run(self) -> None:
         application = self.build_application()

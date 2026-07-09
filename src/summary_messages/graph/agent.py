@@ -57,6 +57,11 @@ def build_chat_model(settings: Settings) -> BaseChatModel:
             raise ValueError("HF_TOKEN is required when LLM_PROVIDER=huggingface")
         return ChatOpenAI(model=settings.llm_model, api_key=settings.hf_token, base_url="https://router.huggingface.co/v1")
 
+    if provider == "anajak":
+        if not settings.anajak_api_key:
+            raise ValueError("ANAJAK_API_KEY is required when LLM_PROVIDER=anajak")
+        return ChatOpenAI(model=settings.llm_model, api_key=settings.anajak_api_key, base_url="https://api.anajakstore.site/v1")
+
     raise ValueError(f"Unsupported LLM provider: {provider}")
 
 

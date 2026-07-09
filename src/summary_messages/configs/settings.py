@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     telegram_bot_token: str = Field(validation_alias="TELEGRAM_BOT_TOKEN")
-    llm_provider: Literal["huggingface", "gemini", "openrouter", "ollama", "hashn0de", "deepseek", "openai"] = Field(default="huggingface", validation_alias="LLM_PROVIDER")
+    llm_provider: Literal["huggingface", "gemini", "openrouter", "ollama", "hashn0de", "deepseek", "openai", "anajak"] = Field(default="huggingface", validation_alias="LLM_PROVIDER")
     llm_model: str = Field(default="gemini-2.5-flash", validation_alias="LLM_MODEL")
 
     gemini_api_key: str | None = Field(default=None, validation_alias="GEMINI_API_KEY")
@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     hashn0de_api_key: str | None = Field(default=None, validation_alias="HASHN0DE_API_KEY")
     deepseek_api_key: str | None = Field(default=None, validation_alias="DEEPSEEK_API_KEY")
     hf_token: str | None = Field(default=None, validation_alias="HF_TOKEN")
+    anajak_api_key: str | None = Field(default=None, validation_alias="ANAJAK_API_KEY")
     tavily_api_key: str | None = Field(default=None, validation_alias="TAVILY_API_KEY")
 
     postgres_url: str = Field(default="postgresql://postgres:postgres@postgres:5432/summary_bot", validation_alias="POSTGRES_URL")

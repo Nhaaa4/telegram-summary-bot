@@ -45,11 +45,12 @@ docker compose --profile local-db up --build
 ## Environment
 
 - `TELEGRAM_BOT_TOKEN` - Telegram bot token from BotFather
-- `LLM_PROVIDER` - `gemini`, `openrouter`, `deepseek`, `huggingface`, `hashn0de`, or `ollama`
+- `LLM_PROVIDER` - `gemini`, `openrouter`, `deepseek`, `huggingface`, `hashn0de`, `anajak`, or `ollama`
 - `LLM_MODEL` - provider model name
 - `GEMINI_API_KEY` - required when `LLM_PROVIDER=gemini`
 - `OPENROUTER_API_KEY` - required when `LLM_PROVIDER=openrouter`
 - `DEEPSEEK_API_KEY` - required when `LLM_PROVIDER=deepseek`
+- `ANAJAK_API_KEY` - required when `LLM_PROVIDER=anajak`
 - `OLLAMA_BASE_URL` - OpenAI-compatible Ollama endpoint
 - `POSTGRES_URL` - Postgres connection string. For Supabase, use the pooler/direct URL from the project dashboard
 - `DAILY_SUMMARY_TIME` - daily digest time in 24-hour `HH:MM`

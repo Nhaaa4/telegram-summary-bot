@@ -120,6 +120,23 @@ class SummaryClient:
             choice = response.choices[0].message.content or ""
             return choice.strip()
 
+        if self.settings.llm_provider == "anajak":
+            api_key = self.settings.anajak_api_key
+            if not api_key:
+                raise ValueError("ANAJAK_API_KEY is required when LLM_PROVIDER=anajak")
+            client = OpenAI(api_key=api_key, base_url="https://api.anajakstore.site/v1")
+            response = client.chat.completions.create(
+                model=self.settings.llm_model,
+                messages=[
+                    {"role": "system", "content": prompt.system},
+                    {"role": "user", "content": prompt.user},
+                ],
+                temperature=0.2,
+                max_tokens=700,
+            )
+            choice = response.choices[0].message.content or ""
+            return choice.strip()
+
         if self.settings.llm_provider == "huggingface":
             api_key = self.settings.hf_token
             if not api_key:

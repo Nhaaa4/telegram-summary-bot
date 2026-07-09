@@ -16,16 +16,16 @@ def fake_agent(reply: str = "Hello from bot"):
     return SimpleNamespace(ainvoke=AsyncMock(return_value={"messages": [AIMessage(content=reply)]}))
 
 
-def build_settings() -> Settings:
-    return Settings.model_validate(
-        {
-            "TELEGRAM_BOT_TOKEN": "test-token",
-            "LLM_PROVIDER": "ollama",
-            "LLM_MODEL": "test-model",
-            "OLLAMA_BASE_URL": "http://localhost:11434/v1",
-            "POSTGRES_URL": "postgresql://postgres:postgres@postgres:5432/summary_bot_test",
-        }
-    )
+def build_settings(**overrides) -> Settings:
+    values = {
+        "TELEGRAM_BOT_TOKEN": "test-token",
+        "LLM_PROVIDER": "ollama",
+        "LLM_MODEL": "test-model",
+        "OLLAMA_BASE_URL": "http://localhost:11434/v1",
+        "POSTGRES_URL": "postgresql://postgres:postgres@postgres:5432/summary_bot_test",
+    }
+    values.update(overrides)
+    return Settings.model_validate(values)
 
 
 @pytest.mark.asyncio
@@ -280,3 +280,37 @@ async def test_mention_handler_replies_when_only_bot_is_mentioned() -> None:
     await bot.mention_handler(update, context)
 
     message.reply_text.assert_awaited_once_with("I'm here @coppsary_bot. Tell me what you need.")
+
+
+@pytest.mark.asyncio
+async def test_predict_command_skips_sticker_when_none_configured() -> None:
+    bot = SummaryBot(build_settings(FALLBACK_STICKER_FILE_ID=None))
+    bot.client = SimpleNamespace(summarize=AsyncMock(side_effect=RuntimeError("provider failure")))
+
+    message = SimpleNamespace(reply_chat_action=AsyncMock(), reply_text=AsyncMock(), reply_sticker=AsyncMock())
+    update = SimpleNamespace(effective_message=message)
+    context = SimpleNamespace(args=["who", "wins?"])
+
+    await bot.predict_command(update, context)
+
+    message.reply_text.assert_awaited_once()
+    message.reply_sticker.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_fuck_command_skips_sticker_when_none_configured() -> None:
+    bot = SummaryBot(build_settings(FALLBACK_STICKER_FILE_ID=None))
+    bot.client = SimpleNamespace(summarize=AsyncMock(return_value="you're mid"))
+
+    message = SimpleNamespace(
+        text="/fuck @target",
+        entities=[SimpleNamespace(type="mention", offset=6, length=7)],
+        reply_chat_action=AsyncMock(),
+        reply_text=AsyncMock(),
+        reply_sticker=AsyncMock(),
+    )
+    update = SimpleNamespace(effective_message=message)
+
+    await bot.fuck_command(update, None)
+
+    message.reply_sticker.assert_not_awaited()

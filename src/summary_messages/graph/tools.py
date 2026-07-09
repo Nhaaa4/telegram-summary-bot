@@ -250,9 +250,10 @@ def build_tools(
         local_remind_at = row["remind_at"].astimezone(ZoneInfo(timezone_name))
         return f"Reminder #{reminder_id} updated: {row['text']} at {local_remind_at.strftime('%Y-%m-%d %I:%M %p')}"
 
-    @tool(description="Answer questions about who created, made, built, or owns this bot.")
+    @tool(description="Answer questions about who created this bot, or about the group and its members.")
     async def about_creator() -> str:
-        """Answer questions about who created, made, built, or owns this bot.
+        """Answer questions about who created, made, built, or owns this bot, or about the
+        group behind it — including listing its members or asking about a specific member.
 
         Returns:
             A description of the group that created the bot, its members, and GitHub link.
