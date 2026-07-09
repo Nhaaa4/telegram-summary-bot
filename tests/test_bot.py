@@ -201,6 +201,37 @@ async def test_private_chat_handler_replies_to_private_text() -> None:
 
 
 @pytest.mark.asyncio
+async def test_private_chat_handler_extracts_text_from_content_blocks() -> None:
+    # Gemini/Gemma "thinking" models can return message.content as a list of content
+    # blocks (reasoning + text) instead of a plain string — only the text block should
+    # ever reach the user.
+    bot = SummaryBot(build_settings())
+    bot._chat_model = SimpleNamespace()
+
+    message = SimpleNamespace(
+        text="are you alive",
+        caption=None,
+        reply_chat_action=AsyncMock(),
+        reply_text=AsyncMock(),
+        reply_sticker=AsyncMock(),
+    )
+    update = SimpleNamespace(
+        effective_message=message,
+        effective_chat=SimpleNamespace(id=123, type="private", title=None, full_name="Private User"),
+        effective_user=SimpleNamespace(id=99, full_name="User A"),
+    )
+    content_blocks = [
+        {"type": "thinking", "thinking": "The user is asking if I'm alive..."},
+        {"type": "text", "text": "No, I'm just code on a server."},
+    ]
+
+    with patch("summary_messages.bot.bot.build_graph", return_value=fake_agent(content_blocks)):
+        await bot.private_chat_handler(update, None)
+
+    message.reply_text.assert_awaited_once_with("No, I'm just code on a server.", parse_mode=ParseMode.MARKDOWN)
+
+
+@pytest.mark.asyncio
 async def test_private_chat_handler_reports_provider_errors() -> None:
     bot = SummaryBot(build_settings())
     bot._chat_model = SimpleNamespace()

@@ -61,6 +61,23 @@ def _is_group_chat(chat) -> bool:
     return bool(chat) and chat.type in {"group", "supergroup"}
 
 
+def _extract_reply_text(content) -> str:
+    # Some providers (e.g. Gemini/Gemma "thinking" models via ChatGoogleGenerativeAI) return
+    # message.content as a list of content blocks (reasoning + text) instead of a plain
+    # string. Keep only the actual text blocks so reasoning never leaks into the chat reply.
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict) and block.get("type") == "text":
+                parts.append(block.get("text", ""))
+        return "".join(parts).strip()
+    return str(content)
+
+
 def _llm_error_message(exc: Exception) -> str:
     if isinstance(exc, APIStatusError):
         if exc.status_code == 402:
@@ -479,7 +496,7 @@ class SummaryBot:
             if isinstance(last_message, ToolMessage) and last_message.name == "send_sticker":
                 return
 
-            await _reply_markdown(message, last_message.content)
+            await _reply_markdown(message, _extract_reply_text(last_message.content))
         except Exception as exc:
             logger.error("Agent reply failed: %s", exc)
             await message.reply_text(_llm_error_message(exc))
